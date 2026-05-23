@@ -1,6 +1,7 @@
-FROM node:20-alpine
+FROM python:3.12-slim
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install --production
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-CMD ["node", "index.js"]
+EXPOSE 5000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]

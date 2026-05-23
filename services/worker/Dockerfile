@@ -1,6 +1,6 @@
-FROM node:20-alpine
+FROM python:3.12-slim
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-CMD ["npm", "run", "dev"]
+CMD ["python", "worker.py"]
