@@ -1,0 +1,42 @@
+version: "3.9"
+services:
+  nats:
+    image: nats:latest
+    command: ["-js", "--jetstream", "--store_dir", "/data/jetstream"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./nats/data:/data
+
+  api:
+    build: ./services/api
+    depends_on:
+      - nats
+    environment:
+      - NATS_URL=nats://nats:4222
+      - PORT=4000
+    ports:
+      - "4000:4000"
+
+  frontend:
+    build: ./services/frontend
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+  worker:
+    build: ./services/worker
+    depends_on:
+      - nats
+    environment:
+      - NATS_URL=nats://nats:4222
+      - LANGGRAPH_MODE=local
+
+  langgraph:
+    build: ./services/langgraph
+    depends_on:
+      - worker
+    environment:
+      - LANGGRAPH_API_KEY=${LANGGRAPH_API_KEY:-}
