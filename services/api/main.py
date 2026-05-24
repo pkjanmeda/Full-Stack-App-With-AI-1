@@ -3,6 +3,7 @@ import json
 import os
 import uuid
 from datetime import datetime
+from time import perf_counter
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -11,9 +12,11 @@ from pydantic import BaseModel
 from nats.aio.client import Client as NATS
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.propagate import extract, inject
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
 app = FastAPI()
 
@@ -87,12 +90,17 @@ async def send_chat(body: ChatRequest):
         session_id = body.sessionId or str(uuid.uuid4())
         span.set_attribute('chat.session_id', session_id)
         span.set_attribute('chat.message_length', len(message))
+        span.set_attribute('chat.question_type', 'chat-question')
+        span.add_event('chat_request_received')
 
         payload = {
             'sessionId': session_id,
             'message': message,
             'timestamp': datetime.utcnow().isoformat() + 'Z',
         }
+
+        upstream_headers = {}
+        inject(upstream_headers)
 
         async with httpx.AsyncClient() as client:
             try:
@@ -103,16 +111,25 @@ async def send_chat(body: ChatRequest):
                         'task': 'chat-question',
                         'payload': {'message': message},
                     },
+                    headers=upstream_headers,
                     timeout=10.0,
                 )
                 response.raise_for_status()
                 orchestration = response.json()
                 span.set_attribute('chat.orchestration', orchestration.get('status', 'unknown'))
-            except Exception:
+                span.set_attribute('chat.orchestration.target', orchestration.get('target', 'none'))
+                span.add_event('langgraph_orchestration_complete')
+            except Exception as exc:
                 span.set_attribute('chat.orchestration', 'fallback-queued')
+                span.add_event('langgraph_orchestration_failed')
                 if js is None:
                     raise HTTPException(status_code=503, detail='message bus is not initialized')
-                await js.publish('chat.incoming', json.dumps(payload).encode())
+                fallback_headers = {}
+                inject(fallback_headers)
+                await js.publish('chat.incoming', json.dumps(payload).encode(), headers=fallback_headers)
+                span.set_attribute('nats.publish.subject', 'chat.incoming')
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR))
                 return {'status': 'queued', 'messageId': str(uuid.uuid4()), 'sessionId': session_id}
 
         return {
@@ -127,6 +144,8 @@ async def send_chat(body: ChatRequest):
 async def stream(sessionId: str = Query(...)):
     async def event_generator():
         sub = await nc.subscribe('chat.response')
+        first_chunk_sent = False
+        stream_started_at = perf_counter()
         try:
             while True:
                 try:
@@ -135,21 +154,35 @@ async def stream(sessionId: str = Query(...)):
                     yield ': ping\n\n'
                     continue
 
-                data = json.loads(msg.data.decode())
-                if data.get('sessionId') == sessionId:
-                    reply = data.get('reply')
-                    if isinstance(reply, str) and reply.strip():
-                        words = reply.split()
-                        partial = ''
-                        for word in words:
-                            partial = f'{partial} {word}'.strip()
-                            chunk = {**data, 'reply': partial, 'isPartial': True}
-                            yield f'event: message\ndata: {json.dumps(chunk)}\n\n'
-                            await asyncio.sleep(0.1)
-                        final_chunk = {**data, 'reply': reply, 'isPartial': False}
-                        yield f'event: message\ndata: {json.dumps(final_chunk)}\n\n'
-                    else:
-                        yield f'event: message\ndata: {json.dumps(data)}\n\n'
+                carrier = dict(msg.headers or {})
+                parent_context = extract(carrier)
+                with tracer.start_as_current_span('api.stream.emit', context=parent_context) as span:
+                    data = json.loads(msg.data.decode())
+                    if data.get('sessionId') == sessionId:
+                        span.set_attribute('chat.session_id', sessionId)
+                        span.set_attribute('stream.response_source', str(data.get('responseSource', 'unknown')))
+                        reply = data.get('reply')
+                        if isinstance(reply, str) and reply.strip():
+                            words = reply.split()
+                            span.set_attribute('stream.word_count', len(words))
+                            span.set_attribute('stream.chunk_delay_ms', 100)
+                            partial = ''
+                            for index, word in enumerate(words, 1):
+                                partial = f'{partial} {word}'.strip()
+                                chunk = {**data, 'reply': partial, 'isPartial': True}
+                                yield f'event: message\ndata: {json.dumps(chunk)}\n\n'
+                                if not first_chunk_sent:
+                                    first_chunk_latency_ms = int((perf_counter() - stream_started_at) * 1000)
+                                    span.set_attribute('stream.first_chunk_latency_ms', first_chunk_latency_ms)
+                                    first_chunk_sent = True
+                                span.add_event('stream_chunk_emitted', {'stream.chunk_index': index})
+                                await asyncio.sleep(0.1)
+                            final_chunk = {**data, 'reply': reply, 'isPartial': False}
+                            yield f'event: message\ndata: {json.dumps(final_chunk)}\n\n'
+                            span.add_event('stream_completed')
+                            span.set_attribute('stream.total_duration_ms', int((perf_counter() - stream_started_at) * 1000))
+                        else:
+                            yield f'event: message\ndata: {json.dumps(data)}\n\n'
         finally:
             await sub.unsubscribe()
 

@@ -2,10 +2,11 @@ import json
 import os
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from nats.aio.client import Client as NATS
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.propagate import extract, inject
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -68,7 +69,9 @@ async def publish_stream(subject: str, payload: dict):
     global js
     if js is None:
         raise RuntimeError('JetStream client is not initialized')
-    await js.publish(subject, json.dumps(payload).encode())
+    headers = {}
+    inject(headers)
+    await js.publish(subject, json.dumps(payload).encode(), headers=headers)
 
 
 @app.on_event('startup')
@@ -106,20 +109,31 @@ async def health():
 
 
 @app.post('/orchestrate')
-async def orchestrate(request: OrchestrationRequest):
-    with tracer.start_as_current_span('orchestrate.request') as span:
+async def orchestrate(request: OrchestrationRequest, raw_request: Request):
+    incoming_headers = dict(raw_request.headers)
+    parent_context = extract(incoming_headers)
+
+    with tracer.start_as_current_span('orchestrate.request', context=parent_context) as span:
         span.set_attribute('chat.session_id', request.sessionId)
         span.set_attribute('chat.task', request.task)
+        span.add_event('orchestration_received')
 
         message = str(request.payload.get('message', '')).strip()
         if not message:
             raise HTTPException(status_code=400, detail='message is required')
 
         span.set_attribute('chat.message_length', len(message))
+        matched_nodes = [node.id for node in graph.nodes.values() if node.matches(message)]
+        span.set_attribute('orchestration.candidate_count', len(matched_nodes))
+        span.set_attribute('orchestration.candidates', ','.join(matched_nodes) if matched_nodes else 'none')
+
         selected_node = graph.find_best_node(message)
         if selected_node:
             span.set_attribute('orchestration.status', 'forwarded')
             span.set_attribute('orchestration.target', selected_node.id)
+            matched_keywords = [k for k in selected_node.match_keywords if k in message.lower()]
+            span.set_attribute('orchestration.matched_keywords', ','.join(matched_keywords) if matched_keywords else 'none')
+            span.add_event('orchestration_route_selected')
 
             payload = {
                 'sessionId': request.sessionId,
@@ -128,8 +142,11 @@ async def orchestrate(request: OrchestrationRequest):
                 'orchestration': f'{selected_node.id}-routing',
                 'nodeId': selected_node.id,
                 'nodeName': selected_node.name,
+                'responseSource': 'langgraph-routing',
             }
             await publish_stream(selected_node.route_name, payload)
+            span.set_attribute('nats.publish.subject', selected_node.route_name)
+            span.add_event('orchestration_forwarded')
             return {
                 'status': 'forwarded',
                 'target': selected_node.id,
@@ -148,8 +165,13 @@ async def orchestrate(request: OrchestrationRequest):
             'originalMessage': message,
             'timestamp': datetime.utcnow().isoformat() + 'Z',
             'feedbackSubmitted': True,
+            'declineReason': 'no_node_match',
+            'responseSource': 'langgraph-direct',
         }
         await publish_stream('chat.response', response_payload)
+        span.set_attribute('nats.publish.subject', 'chat.response')
+        span.set_attribute('orchestration.decline_reason', 'no_node_match')
+        span.add_event('orchestration_declined')
 
         return {
             'status': 'declined',

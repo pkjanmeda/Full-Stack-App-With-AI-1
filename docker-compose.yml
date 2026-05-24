@@ -54,13 +54,19 @@ services:
   shift-worker:
     build: ./services/shift-worker
     depends_on:
+      - phoenix
       - nats
     environment:
       - NATS_URL=nats://nats:4222
+      - OTEL_SERVICE_NAME=shift-worker
+      - OTEL_ENVIRONMENT=local
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:6006/v1/traces}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
 
   kpi-worker:
     build: ./services/kpi-worker
     depends_on:
+      - phoenix
       - nats
       - cosmos-emulator
     environment:
@@ -69,6 +75,10 @@ services:
       - COSMOS_KEY=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==
       - COSMOS_DB=factory_ops
       - COSMOS_CONTAINER=kpi_data
+      - OTEL_SERVICE_NAME=kpi-worker
+      - OTEL_ENVIRONMENT=local
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:6006/v1/traces}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
 
   langgraph:
     build: ./services/langgraph
