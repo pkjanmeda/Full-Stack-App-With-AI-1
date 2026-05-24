@@ -1,5 +1,14 @@
 version: "3.9"
 services:
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+    volumes:
+      - ./phoenix:/mnt/data
+    environment:
+      - PHOENIX_WORKING_DIR=/mnt/data
+
   nats:
     image: nats:latest
     command: ["-js", "--jetstream", "--store_dir", "/data/jetstream"]
@@ -21,12 +30,17 @@ services:
   api:
     build: ./services/api
     depends_on:
+      - phoenix
       - nats
       - langgraph
     environment:
       - NATS_URL=nats://nats:4222
       - LANGGRAPH_URL=http://langgraph:5000
       - PORT=4000
+      - OTEL_SERVICE_NAME=api-service
+      - OTEL_ENVIRONMENT=local
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:6006/v1/traces}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
     ports:
       - "4000:4000"
 
@@ -59,9 +73,14 @@ services:
   langgraph:
     build: ./services/langgraph
     depends_on:
+      - phoenix
       - nats
     environment:
       - LANGGRAPH_MODE=local
       - NATS_URL=nats://nats:4222
+      - OTEL_SERVICE_NAME=langgraph-orchestrator
+      - OTEL_ENVIRONMENT=local
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:6006/v1/traces}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
     ports:
       - "5000:5000"

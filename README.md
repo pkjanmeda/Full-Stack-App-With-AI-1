@@ -39,3 +39,25 @@ This repository contains a modular full-stack application with:
 - A separate Cosmos emulator project ships with `services/cosmos-emulator/cosmos-init.sql` for synthetic shift and KPI data.
 - The frontend connects to `/api/chat/stream` for server-sent events.
 - LangGraph orchestration is local-only and does not require a LangChain API key in this setup.
+
+## Tracing To Arize
+
+The `api` and `langgraph` services include OpenTelemetry tracing.
+
+By default, this repo runs Arize Phoenix locally in Docker and sends traces to it.
+
+1. Start the stack:
+   ```bash
+   docker compose up --build
+   ```
+2. Open Phoenix UI at `http://localhost:6006`.
+
+### Use Arize Cloud Instead (Optional)
+
+Override OTLP endpoint and headers in your shell or `.env`:
+   ```bash
+   OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.arize.com/v1/traces
+   OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer <ARIZE_API_KEY>
+   ```
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an empty value to disable telemetry export.
