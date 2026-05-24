@@ -139,17 +139,16 @@ deployment:
       build: ./services/frontend
       ports: [3000:3000]
       depends_on: [api]
-    - name: worker
-      build: ./services/worker
+    - name: shift-worker
+      build: ./services/shift-worker
       depends_on: [nats]
       environment:
         - NATS_URL=nats://nats:4222
-        - LANGGRAPH_MODE=local
     - name: langgraph_agent
       build: ./services/langgraph
-      depends_on: [worker]
+      depends_on: [shift-worker]
       environment:
-        - LANGGRAPH_API_KEY=${LANGGRAPH_API_KEY:-}
+        - LANGGRAPH_MODE=local
 
 scalability:
   - separate backend, frontend, message broker, and worker responsibilities

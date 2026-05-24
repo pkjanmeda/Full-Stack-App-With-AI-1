@@ -26,15 +26,12 @@ services:
     ports:
       - "3000:3000"
 
-  worker:
-    build: ./services/worker
+  shift-worker:
+    build: ./services/shift-worker
     depends_on:
       - nats
-      - langgraph
     environment:
       - NATS_URL=nats://nats:4222
-      - LANGGRAPH_MODE=local
-      - LANGGRAPH_URL=http://langgraph:5000
 
   langgraph:
     build: ./services/langgraph
