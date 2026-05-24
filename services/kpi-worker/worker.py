@@ -4,18 +4,63 @@ import os
 import random
 from datetime import datetime
 
-from azure.cosmos import CosmosClient
 from nats.aio.client import Client as NATS
 from nats.errors import TimeoutError
+
+from cosmos_store import CosmosKpiStore
 
 NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
 COSMOS_ENDPOINT = os.getenv('COSMOS_ENDPOINT', 'https://cosmos-emulator:8081/')
 COSMOS_KEY = os.getenv(
     'COSMOS_KEY',
-    'C2y6yDjf5/R+ob0N8A7Cgv30VR0YNi2I5aF4h4T8WT4hqtP7VhKzIQ7L2lqmq0LZ0SQW5Luy5pB8OZ+9c='
+    'C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=='
 )
 COSMOS_DB = os.getenv('COSMOS_DB', 'factory_ops')
 COSMOS_CONTAINER = os.getenv('COSMOS_CONTAINER', 'kpi_data')
+COSMOS_PARTITION_KEY = os.getenv('COSMOS_PARTITION_KEY', '/lineId')
+
+SYNTHETIC_KPI_DOCS = [
+    {
+        'id': 'kpi-1',
+        'lineId': 'LineA',
+        'product': 'Widget X',
+        'goodQty': 1180,
+        'wasteQty': 20,
+        'efficiency': 94.4,
+        'cycleTimeSeconds': 42,
+        'timestamp': '2026-05-22T14:00:00Z',
+    },
+    {
+        'id': 'kpi-2',
+        'lineId': 'LineB',
+        'product': 'Widget Y',
+        'goodQty': 980,
+        'wasteQty': 35,
+        'efficiency': 89.7,
+        'cycleTimeSeconds': 48,
+        'timestamp': '2026-05-22T22:00:00Z',
+    },
+    {
+        'id': 'kpi-3',
+        'lineId': 'LineC',
+        'product': 'Widget Z',
+        'goodQty': 1025,
+        'wasteQty': 15,
+        'efficiency': 96.1,
+        'cycleTimeSeconds': 39,
+        'timestamp': '2026-05-23T06:00:00Z',
+    },
+]
+
+
+store = CosmosKpiStore(
+    endpoint=COSMOS_ENDPOINT,
+    key=COSMOS_KEY,
+    database_name=COSMOS_DB,
+    container_name=COSMOS_CONTAINER,
+    partition_key_path=COSMOS_PARTITION_KEY,
+    seed_documents=SYNTHETIC_KPI_DOCS,
+)
 
 
 async def ensure_streams(js):
@@ -56,12 +101,8 @@ def build_kpi_query(message: str):
 
 
 def query_kpi_documents(message: str):
-    client = CosmosClient(COSMOS_ENDPOINT, credential=COSMOS_KEY, connection_verify=False)
-    database = client.get_database_client(COSMOS_DB)
-    container = database.get_container_client(COSMOS_CONTAINER)
-
     query, parameters, product = build_kpi_query(message)
-    items = list(container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
+    items = store.query_with_retry(query=query, parameters=parameters)
     return items, product
 
 
@@ -98,6 +139,7 @@ async def main():
     sub = await js.subscribe('chat.kpi', durable='kpi_worker_pool')
     print(f'KPI worker connected to NATS at {NATS_URL}')
     print(f'KPI worker connecting to Cosmos at {COSMOS_ENDPOINT}')
+    store.ensure_resources_with_retry()
 
     while True:
         try:

@@ -72,7 +72,10 @@ def main():
     )
     parser.add_argument(
         '--key',
-        default=os.getenv('COSMOS_KEY', 'C2y6yDjf5/R+ob0N8A7Cgv30VR0YNi2I5...'),
+        default=os.getenv(
+            'COSMOS_KEY',
+            'C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=='
+        ),
         help='Cosmos DB account key',
     )
     args = parser.parse_args()
