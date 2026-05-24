@@ -7,3 +7,5 @@ dist
 # Local NATS JetStream storage
 nats/data/
 nats/data/jetstream/jetstream/$G/streams/
+nats/data/jetstream/jetstream/$G/streams/chat_incoming/obs/worker_pool/o.dat
+nats/data/jetstream/jetstream/$G/streams/chat_incoming/msgs/1.blk
