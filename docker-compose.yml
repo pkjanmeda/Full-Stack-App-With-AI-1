@@ -35,6 +35,13 @@ services:
     environment:
       - NATS_URL=nats://nats:4222
 
+  kpi-worker:
+    build: ./services/kpi-worker
+    depends_on:
+      - nats
+    environment:
+      - NATS_URL=nats://nats:4222
+
   langgraph:
     build: ./services/langgraph
     depends_on:

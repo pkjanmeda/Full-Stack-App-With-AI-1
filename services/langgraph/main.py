@@ -36,6 +36,21 @@ def requires_shift_handling(message: str) -> bool:
     return any(keyword in normalized for keyword in shift_keywords)
 
 
+def requires_kpi_handling(message: str) -> bool:
+    normalized = message.lower()
+    kpi_keywords = [
+        'kpi',
+        'metric',
+        'performance',
+        'goal',
+        'target',
+        'indicator',
+        'dashboard',
+        'trend',
+    ]
+    return any(keyword in normalized for keyword in kpi_keywords)
+
+
 async def publish_stream(subject: str, payload: dict):
     global js
     if js is None:
@@ -51,6 +66,7 @@ async def startup_event():
 
     for stream_name, subjects in [
         ('chat_incoming', ['chat.incoming']),
+        ('chat_kpi', ['chat.kpi']),
         ('chat_response', ['chat.response']),
     ]:
         try:
@@ -77,6 +93,21 @@ async def orchestrate(request: OrchestrationRequest):
     message = str(request.payload.get('message', '')).strip()
     if not message:
         raise HTTPException(status_code=400, detail='message is required')
+
+    if requires_kpi_handling(message):
+        payload = {
+            'sessionId': request.sessionId,
+            'message': message,
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'orchestration': 'kpi-routing',
+        }
+        await publish_stream('chat.kpi', payload)
+        return {
+            'status': 'forwarded',
+            'target': 'kpi-worker',
+            'sessionId': request.sessionId,
+            'message': 'Question forwarded to kpi-worker for handling.',
+        }
 
     if requires_shift_handling(message):
         payload = {

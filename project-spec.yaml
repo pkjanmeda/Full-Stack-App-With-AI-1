@@ -144,11 +144,17 @@ deployment:
       depends_on: [nats]
       environment:
         - NATS_URL=nats://nats:4222
+    - name: kpi-worker
+      build: ./services/kpi-worker
+      depends_on: [nats]
+      environment:
+        - NATS_URL=nats://nats:4222
     - name: langgraph_agent
       build: ./services/langgraph
-      depends_on: [shift-worker]
+      depends_on: [shift-worker, kpi-worker]
       environment:
         - LANGGRAPH_MODE=local
+        - NATS_URL=nats://nats:4222
 
 scalability:
   - separate backend, frontend, message broker, and worker responsibilities
