@@ -9,6 +9,15 @@ services:
     volumes:
       - ./nats/data:/data
 
+  cosmos-emulator:
+    build: ./services/cosmos-emulator
+    ports:
+      - "8081:8081"
+      - "10250:10250"
+    environment:
+      - AZURE_COSMOS_EMULATOR_PARTITION_COUNT=1
+      - AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE=true
+
   api:
     build: ./services/api
     depends_on:
@@ -39,8 +48,13 @@ services:
     build: ./services/kpi-worker
     depends_on:
       - nats
+      - cosmos-emulator
     environment:
       - NATS_URL=nats://nats:4222
+      - COSMOS_ENDPOINT=https://cosmos-emulator:8081/
+      - COSMOS_KEY=C2y6yDjf5/R+ob0N8A7Cgv30VR0YNi2I5aF4h4T8WT4hqtP7VhKzIQ7L2lqmq0LZ0SQW5Luy5pB8OZ+9c=
+      - COSMOS_DB=factory_ops
+      - COSMOS_CONTAINER=kpi_data
 
   langgraph:
     build: ./services/langgraph

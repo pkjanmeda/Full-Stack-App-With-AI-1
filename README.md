@@ -22,8 +22,9 @@ This repository contains a modular full-stack application with:
 - `frontend`: React chat UI
 - `api`: REST endpoint to accept user chat messages
 - `shift-worker`: JetStream consumer that processes shift-related chat questions and returns randomized responses
-- `kpi-worker`: JetStream consumer that processes KPI-related chat questions and returns randomized KPI facts plus the original question
+- `kpi-worker`: JetStream consumer that processes KPI-related chat questions and queries the Cosmos emulator for product KPI data
 - `langgraph`: Python orchestration service for local LangGraph-style workflow
+- `cosmos-emulator`: Cosmos DB emulator container with synthetic shift and KPI datasets
 - `nats`: NATS JetStream broker
 
 ## Notes
@@ -35,5 +36,6 @@ This repository contains a modular full-stack application with:
 - If the question is shift-related, `shift-worker` consumes the message from NATS and publishes to `chat.response`.
 - If the question is neither shift-related nor KPI-related, LangGraph publishes a decline response and feedback notice directly to `chat.response`.
 - The `shift-worker` and `kpi-worker` services remain simple and produce randomized test responses.
+- A separate Cosmos emulator project ships with `services/cosmos-emulator/cosmos-init.sql` for synthetic shift and KPI data.
 - The frontend connects to `/api/chat/stream` for server-sent events.
 - LangGraph orchestration is local-only and does not require a LangChain API key in this setup.
