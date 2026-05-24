@@ -6,3 +6,4 @@ dist
 
 # Local NATS JetStream storage
 nats/data/
+nats/data/jetstream/jetstream/$G/streams/

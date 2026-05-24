@@ -5,6 +5,11 @@ type ChatLine = {
   text: string;
 };
 
+type StreamMessage = {
+  reply?: string;
+  isPartial?: boolean;
+};
+
 function App() {
   const [sessionId] = useState(() => `session-${Math.random().toString(36).slice(2, 8)}`);
   const [message, setMessage] = useState('');
@@ -17,8 +22,24 @@ function App() {
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false);
     source.onmessage = (event) => {
-      const data = JSON.parse(event.data) as { reply: string };
-      setChat((prev) => [...prev, { sender: 'agent', text: data.reply }]);
+      const data = JSON.parse(event.data) as StreamMessage;
+      if (typeof data.reply !== 'string') return;
+
+      setChat((prev) => {
+        if (data.isPartial) {
+          const last = prev[prev.length - 1];
+          if (last?.sender === 'agent') {
+            return [...prev.slice(0, -1), { ...last, text: data.reply! }];
+          }
+          return [...prev, { sender: 'agent', text: data.reply! }];
+        }
+
+        const last = prev[prev.length - 1];
+        if (last?.sender === 'agent') {
+          return [...prev.slice(0, -1), { ...last, text: data.reply }];
+        }
+        return [...prev, { sender: 'agent', text: data.reply }];
+      });
     };
     eventSourceRef.current = source;
 

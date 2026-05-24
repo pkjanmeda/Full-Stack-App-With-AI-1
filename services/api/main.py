@@ -91,7 +91,19 @@ async def stream(sessionId: str = Query(...)):
 
                 data = json.loads(msg.data.decode())
                 if data.get('sessionId') == sessionId:
-                    yield f'event: message\ndata: {json.dumps(data)}\n\n'
+                    reply = data.get('reply')
+                    if isinstance(reply, str) and reply.strip():
+                        words = reply.split()
+                        partial = ''
+                        for word in words:
+                            partial = f'{partial} {word}'.strip()
+                            chunk = {**data, 'reply': partial, 'isPartial': True}
+                            yield f'event: message\ndata: {json.dumps(chunk)}\n\n'
+                            await asyncio.sleep(0.1)
+                        final_chunk = {**data, 'reply': reply, 'isPartial': False}
+                        yield f'event: message\ndata: {json.dumps(final_chunk)}\n\n'
+                    else:
+                        yield f'event: message\ndata: {json.dumps(data)}\n\n'
         finally:
             await sub.unsubscribe()
 
