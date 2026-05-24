@@ -8,7 +8,6 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from nats.aio.client import Client as NATS
-from nats.js.errors import JetStreamError
 
 app = FastAPI()
 
@@ -34,7 +33,7 @@ async def startup_event():
     ]:
         try:
             await js.add_stream(name=stream_name, subjects=subjects)
-        except JetStreamError:
+        except Exception:
             pass
 
 

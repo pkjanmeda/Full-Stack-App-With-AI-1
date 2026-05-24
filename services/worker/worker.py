@@ -6,7 +6,7 @@ from datetime import datetime
 
 import httpx
 from nats.aio.client import Client as NATS
-from nats.js.errors import JetStreamError
+from nats.errors import TimeoutError
 
 NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
 LANGGRAPH_URL = os.getenv('LANGGRAPH_URL', 'http://langgraph:5000')
@@ -18,7 +18,7 @@ async def ensure_streams(js):
     ]:
         try:
             await js.add_stream(name=stream_name, subjects=subjects)
-        except JetStreamError:
+        except Exception:
             pass
 
 
@@ -53,10 +53,15 @@ async def main():
 
     await ensure_streams(js)
 
-    sub = await js.subscribe('chat.incoming', durable='worker_pool', ack_wait=30, ack_policy='explicit')
+    sub = await js.subscribe('chat.incoming', durable='worker_pool')
     print(f'Worker connected to NATS at {NATS_URL}')
 
-    async for msg in sub:
+    while True:
+        try:
+            msg = await sub.next_msg(timeout=5)
+        except TimeoutError:
+            continue
+
         payload = json.loads(msg.data.decode())
         orchestration = await orchestrate(
             payload['sessionId'],
