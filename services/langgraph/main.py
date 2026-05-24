@@ -6,6 +6,8 @@ from fastapi import FastAPI, HTTPException
 from nats.aio.client import Client as NATS
 from pydantic import BaseModel
 
+from agents import graph
+
 app = FastAPI()
 
 LANGGRAPH_MODE = os.getenv('LANGGRAPH_MODE', 'local')
@@ -14,41 +16,15 @@ NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
 nc = NATS()
 js = None
 
+
 class OrchestrationRequest(BaseModel):
     sessionId: str
     task: str
     payload: dict
 
 
-def requires_shift_handling(message: str) -> bool:
-    normalized = message.lower()
-    shift_keywords = [
-        'shift',
-        'schedule',
-        'roster',
-        'work time',
-        'shift change',
-        'shift swap',
-        'shift start',
-        'shift end',
-        'time off',
-    ]
-    return any(keyword in normalized for keyword in shift_keywords)
-
-
-def requires_kpi_handling(message: str) -> bool:
-    normalized = message.lower()
-    kpi_keywords = [
-        'kpi',
-        'metric',
-        'performance',
-        'goal',
-        'target',
-        'indicator',
-        'dashboard',
-        'trend',
-    ]
-    return any(keyword in normalized for keyword in kpi_keywords)
+def stream_name_for_subject(subject: str) -> str:
+    return subject.replace('.', '_')
 
 
 async def publish_stream(subject: str, payload: dict):
@@ -64,13 +40,15 @@ async def startup_event():
     await nc.connect(servers=[NATS_URL])
     js = nc.jetstream()
 
-    for stream_name, subjects in [
-        ('chat_incoming', ['chat.incoming']),
-        ('chat_kpi', ['chat.kpi']),
-        ('chat_response', ['chat.response']),
-    ]:
+    subjects = set()
+    for node in graph.nodes.values():
+        subjects.update(node.subjects)
+    subjects.add('chat.response')
+
+    for subject in subjects:
+        stream_name = stream_name_for_subject(subject)
         try:
-            await js.add_stream(name=stream_name, subjects=subjects)
+            await js.add_stream(name=stream_name, subjects=[subject])
         except Exception:
             pass
 
@@ -85,6 +63,7 @@ async def health():
     return {
         'status': 'langgraph-orchestrator',
         'mode': LANGGRAPH_MODE,
+        'graphNodes': [node.id for node in graph.nodes.values()],
     }
 
 
@@ -94,34 +73,22 @@ async def orchestrate(request: OrchestrationRequest):
     if not message:
         raise HTTPException(status_code=400, detail='message is required')
 
-    if requires_kpi_handling(message):
+    selected_node = graph.find_best_node(message)
+    if selected_node:
         payload = {
             'sessionId': request.sessionId,
             'message': message,
             'timestamp': datetime.utcnow().isoformat() + 'Z',
-            'orchestration': 'kpi-routing',
+            'orchestration': f'{selected_node.id}-routing',
+            'nodeId': selected_node.id,
+            'nodeName': selected_node.name,
         }
-        await publish_stream('chat.kpi', payload)
+        await publish_stream(selected_node.route_name, payload)
         return {
             'status': 'forwarded',
-            'target': 'kpi-worker',
+            'target': selected_node.id,
             'sessionId': request.sessionId,
-            'message': 'Question forwarded to kpi-worker for handling.',
-        }
-
-    if requires_shift_handling(message):
-        payload = {
-            'sessionId': request.sessionId,
-            'message': message,
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
-            'orchestration': 'shift-routing',
-        }
-        await publish_stream('chat.incoming', payload)
-        return {
-            'status': 'forwarded',
-            'target': 'shift-worker',
-            'sessionId': request.sessionId,
-            'message': 'Question forwarded to shift-worker for handling.',
+            'message': f'Question forwarded to {selected_node.name} for handling.',
         }
 
     decline_text = (

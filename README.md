@@ -29,7 +29,8 @@ This repository contains a modular full-stack application with:
 ## Notes
 
 - The API sends incoming questions to the LangGraph orchestrator first.
-- The LangGraph orchestrator uses static rules to decide whether to forward the question to `shift-worker` or `kpi-worker`.
+- The LangGraph orchestrator uses a lightweight local node graph to determine the correct AI agent node.
+- Separate `shift-agent` and `kpi-agent` definitions are treated as graph nodes with their own subject routes.
 - If the question is KPI-related, `kpi-worker` consumes the message from NATS and publishes to `chat.response`.
 - If the question is shift-related, `shift-worker` consumes the message from NATS and publishes to `chat.response`.
 - If the question is neither shift-related nor KPI-related, LangGraph publishes a decline response and feedback notice directly to `chat.response`.
