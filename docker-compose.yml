@@ -13,8 +13,10 @@ services:
     build: ./services/api
     depends_on:
       - nats
+      - langgraph
     environment:
       - NATS_URL=nats://nats:4222
+      - LANGGRAPH_URL=http://langgraph:5000
       - PORT=4000
     ports:
       - "4000:4000"
@@ -35,7 +37,10 @@ services:
 
   langgraph:
     build: ./services/langgraph
+    depends_on:
+      - nats
     environment:
       - LANGGRAPH_MODE=local
+      - NATS_URL=nats://nats:4222
     ports:
       - "5000:5000"

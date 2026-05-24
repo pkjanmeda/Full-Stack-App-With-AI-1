@@ -4,6 +4,7 @@ import os
 import uuid
 from datetime import datetime
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ from nats.aio.client import Client as NATS
 app = FastAPI()
 
 NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
+LANGGRAPH_URL = os.getenv('LANGGRAPH_URL', 'http://langgraph:5000')
 
 nc = NATS()
 js = None
@@ -50,8 +52,29 @@ async def send_chat(body: ChatRequest):
         'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
 
-    await js.publish('chat.incoming', json.dumps(payload).encode())
-    return {'status': 'queued', 'messageId': str(uuid.uuid4()), 'sessionId': session_id}
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f'{LANGGRAPH_URL}/orchestrate',
+                json={
+                    'sessionId': session_id,
+                    'task': 'chat-question',
+                    'payload': {'message': message},
+                },
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            orchestration = response.json()
+        except Exception:
+            await js.publish('chat.incoming', json.dumps(payload).encode())
+            return {'status': 'queued', 'messageId': str(uuid.uuid4()), 'sessionId': session_id}
+
+    return {
+        'status': 'queued',
+        'messageId': str(uuid.uuid4()),
+        'sessionId': session_id,
+        'orchestration': orchestration.get('status'),
+    }
 
 
 @app.get('/api/chat/stream')

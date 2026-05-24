@@ -15,7 +15,7 @@ This repository contains a modular full-stack application with:
    docker compose up --build
    ```
 3. Open the frontend at `http://localhost:3000`.
-4. Send a chat message and watch `shift-worker` publish responses through JetStream.
+4. Send a chat message and watch LangGraph decide whether to forward it to `shift-worker` or reply with product feedback.
 
 ## Services
 
@@ -27,9 +27,10 @@ This repository contains a modular full-stack application with:
 
 ## Notes
 
-- The API publishes inbound messages to `chat.incoming`.
-- `shift-worker` consumes from NATS and publishes to `chat.response`.
-- `shift-worker` currently appends randomized test text to each request payload.
-- The `langgraph` service represents the orchestration layer, but the worker itself remains simple.
+- The API sends incoming questions to the LangGraph orchestrator first.
+- The LangGraph orchestrator uses static rules to decide whether to forward the question to `shift-worker`.
+- If the question is shift-related, `shift-worker` consumes the message from NATS and publishes to `chat.response`.
+- If the question is not shift-related, LangGraph publishes a decline response and feedback notice directly to `chat.response`.
+- The `shift-worker` service remains simple and only appends randomized test text.
 - The frontend connects to `/api/chat/stream` for server-sent events.
 - LangGraph orchestration is local-only and does not require a LangChain API key in this setup.
