@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
@@ -31,6 +32,29 @@ js = None
 tracer = trace.get_tracer(__name__)
 redis_memory = None
 memory_cache_task = None
+thread_name_memory = {}
+
+GREETING_TERMS = {
+    'hi',
+    'hello',
+    'hey',
+    'good morning',
+    'good afternoon',
+    'good evening',
+}
+
+NAME_PATTERNS = [
+    re.compile(r"\bmy name is\s+([a-zA-Z][a-zA-Z\s'-]{0,40})", re.IGNORECASE),
+    re.compile(r"\bi am\s+([a-zA-Z][a-zA-Z\s'-]{0,40})", re.IGNORECASE),
+    re.compile(r"\bi'm\s+([a-zA-Z][a-zA-Z\s'-]{0,40})", re.IGNORECASE),
+    re.compile(r"\bcall me\s+([a-zA-Z][a-zA-Z\s'-]{0,40})", re.IGNORECASE),
+]
+
+NAME_QUERY_PATTERNS = [
+    re.compile(r"\bwhat is my name\b", re.IGNORECASE),
+    re.compile(r"\bdo you know my name\b", re.IGNORECASE),
+    re.compile(r"\bwho am i\b", re.IGNORECASE),
+]
 
 
 class OrchestrationRequest(BaseModel):
@@ -74,6 +98,41 @@ def stream_name_for_subject(subject: str) -> str:
     return subject.replace('.', '_')
 
 
+def normalize_whitespace(value: str) -> str:
+    return ' '.join(value.strip().split())
+
+
+def sanitize_name(value: str) -> str | None:
+    cleaned = normalize_whitespace(value)
+    if not cleaned:
+        return None
+    # Cap to first three words to keep profile values simple and predictable.
+    parts = cleaned.split(' ')[:3]
+    normalized = ' '.join(part.capitalize() for part in parts)
+    if len(normalized) > 50:
+        normalized = normalized[:50].rstrip()
+    return normalized or None
+
+
+def extract_user_name(message: str) -> str | None:
+    for pattern in NAME_PATTERNS:
+        match = pattern.search(message)
+        if match:
+            return sanitize_name(match.group(1))
+    return None
+
+
+def is_name_query(message: str) -> bool:
+    return any(pattern.search(message) for pattern in NAME_QUERY_PATTERNS)
+
+
+def is_greeting(message: str) -> bool:
+    normalized = normalize_whitespace(message).lower()
+    if normalized in GREETING_TERMS:
+        return True
+    return any(normalized.startswith(term + ' ') for term in GREETING_TERMS)
+
+
 async def publish_stream(subject: str, payload: dict):
     global js
     if js is None:
@@ -81,6 +140,45 @@ async def publish_stream(subject: str, payload: dict):
     headers = {}
     inject(headers)
     await js.publish(subject, json.dumps(payload).encode(), headers=headers)
+
+
+async def save_user_name(session_id: str, user_name: str):
+    thread_name_memory[session_id] = user_name
+    if redis_memory is not None:
+        try:
+            await redis_memory.set_user_name(session_id, user_name)
+        except Exception:
+            pass
+
+
+async def load_user_name(session_id: str) -> str | None:
+    if redis_memory is not None:
+        try:
+            stored = await redis_memory.get_user_name(session_id)
+            if stored:
+                thread_name_memory[session_id] = stored
+                return stored
+        except Exception:
+            pass
+    return thread_name_memory.get(session_id)
+
+
+async def publish_direct_response(session_id: str, message: str, reply: str, source: str):
+    response_payload = {
+        'sessionId': session_id,
+        'reply': reply,
+        'originalMessage': message,
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'responseSource': source,
+        'cacheHit': False,
+    }
+    await publish_stream('chat.response', response_payload)
+    return {
+        'status': 'responded',
+        'sessionId': session_id,
+        'reply': reply,
+        'cacheHit': False,
+    }
 
 
 async def cache_response_messages():
@@ -185,6 +283,56 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             raise HTTPException(status_code=400, detail='message is required')
 
         span.set_attribute('chat.message_length', len(message))
+
+        extracted_name = extract_user_name(message)
+        if extracted_name:
+            await save_user_name(request.sessionId, extracted_name)
+            span.set_attribute('orchestration.status', 'basic-ai-name-saved')
+            span.set_attribute('basic_ai.intent', 'save_name')
+            span.add_event('basic_ai_name_saved')
+            span.set_attribute('nats.publish.subject', 'chat.response')
+            return await publish_direct_response(
+                session_id=request.sessionId,
+                message=message,
+                reply=f'Nice to meet you, {extracted_name}. I will remember your name for this thread.',
+                source='langgraph-basic-ai',
+            )
+
+        if is_name_query(message):
+            stored_name = await load_user_name(request.sessionId)
+            span.set_attribute('orchestration.status', 'basic-ai-name-query')
+            span.set_attribute('basic_ai.intent', 'query_name')
+            span.add_event('basic_ai_name_queried')
+            span.set_attribute('nats.publish.subject', 'chat.response')
+            if stored_name:
+                return await publish_direct_response(
+                    session_id=request.sessionId,
+                    message=message,
+                    reply=f'Your name is {stored_name}.',
+                    source='langgraph-basic-ai',
+                )
+            return await publish_direct_response(
+                session_id=request.sessionId,
+                message=message,
+                reply='I do not know your name yet. Tell me by saying: my name is <your name>.',
+                source='langgraph-basic-ai',
+            )
+
+        if is_greeting(message):
+            stored_name = await load_user_name(request.sessionId)
+            span.set_attribute('orchestration.status', 'basic-ai-greeting')
+            span.set_attribute('basic_ai.intent', 'greeting')
+            span.add_event('basic_ai_greeting_handled')
+            span.set_attribute('nats.publish.subject', 'chat.response')
+            reply = 'Hello! How can I help you today?'
+            if stored_name:
+                reply = f'Hello {stored_name}! How can I help you today?'
+            return await publish_direct_response(
+                session_id=request.sessionId,
+                message=message,
+                reply=reply,
+                source='langgraph-basic-ai',
+            )
 
         if redis_memory is not None:
             cached_match = await redis_memory.search_similar(request.sessionId, message)

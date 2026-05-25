@@ -3,6 +3,7 @@ import json
 import math
 import re
 from datetime import datetime
+from typing import Any, cast
 
 import redis.asyncio as redis
 
@@ -25,14 +26,19 @@ class RedisConversationMemory:
 
     async def connect(self):
         self.client = redis.from_url(self.redis_url, decode_responses=True)
-        await self.client.ping()
+        client = cast(Any, self.client)
+        await client.ping()
 
     async def close(self):
         if self.client is not None:
-            await self.client.close()
+            client = cast(Any, self.client)
+            await client.close()
 
     def _session_key(self, session_id: str) -> str:
         return f'chat:memory:{session_id}'
+
+    def _profile_key(self, session_id: str) -> str:
+        return f'chat:profile:{session_id}'
 
     def _tokenize(self, text: str) -> list[str]:
         return re.findall(r"[a-z0-9']+", text.lower())
@@ -61,6 +67,7 @@ class RedisConversationMemory:
         if self.client is None:
             return
 
+        client = cast(Any, self.client)
         key = self._session_key(session_id)
         payload = {
             'sessionId': session_id,
@@ -69,16 +76,17 @@ class RedisConversationMemory:
             'source': source,
             'timestamp': datetime.utcnow().isoformat() + 'Z',
         }
-        await self.client.lpush(key, json.dumps(payload))
-        await self.client.ltrim(key, 0, self.max_turns - 1)
-        await self.client.expire(key, self.ttl_seconds)
+        await client.lpush(key, json.dumps(payload))
+        await client.ltrim(key, 0, self.max_turns - 1)
+        await client.expire(key, self.ttl_seconds)
 
     async def search_similar(self, session_id: str, query: str):
         if self.client is None:
             return None
 
+        client = cast(Any, self.client)
         key = self._session_key(session_id)
-        entries = await self.client.lrange(key, 0, self.max_turns - 1)
+        entries = await client.lrange(key, 0, self.max_turns - 1)
         if not entries:
             return None
 
@@ -111,3 +119,24 @@ class RedisConversationMemory:
             'matchedQuestion': best_match.get('userMessage'),
             'source': best_match.get('source', 'memory'),
         }
+
+    async def set_user_name(self, session_id: str, user_name: str):
+        if self.client is None:
+            return
+
+        client = cast(Any, self.client)
+        profile_key = self._profile_key(session_id)
+        await client.hset(profile_key, mapping={'userName': user_name})
+        await client.expire(profile_key, self.ttl_seconds)
+
+    async def get_user_name(self, session_id: str):
+        if self.client is None:
+            return None
+
+        client = cast(Any, self.client)
+        profile_key = self._profile_key(session_id)
+        value = await client.hget(profile_key, 'userName')
+        if value is None:
+            return None
+        name = str(value).strip()
+        return name or None
