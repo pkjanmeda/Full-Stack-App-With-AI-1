@@ -11,6 +11,7 @@ from opentelemetry.propagate import extract, inject
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 
 from agents import graph
@@ -171,9 +172,12 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
     incoming_headers = dict(raw_request.headers)
     parent_context = extract(incoming_headers)
 
-    with tracer.start_as_current_span('orchestrate.request', context=parent_context) as span:
+    with tracer.start_as_current_span('orchestrate.request', context=parent_context, kind=SpanKind.SERVER) as span:
+        span.set_attribute('openinference.span.kind', 'AGENT')
         span.set_attribute('chat.session_id', request.sessionId)
         span.set_attribute('chat.task', request.task)
+        span.set_attribute('cache.hit', False)
+        span.set_attribute('cache.source', 'none')
         span.add_event('orchestration_received')
 
         message = str(request.payload.get('message', '')).strip()
@@ -188,6 +192,9 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
                 span.set_attribute('orchestration.status', 'cache-hit')
                 span.set_attribute('semantic_cache.hit', True)
                 span.set_attribute('semantic_cache.score', cached_match.get('score', 0.0))
+                span.set_attribute('cache.hit', True)
+                span.set_attribute('cache.source', 'redis-semantic-cache')
+                span.set_attribute('cache.score', cached_match.get('score', 0.0))
                 span.add_event('semantic_cache_hit')
 
                 response_payload = {

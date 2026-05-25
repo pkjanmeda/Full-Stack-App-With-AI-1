@@ -15,7 +15,7 @@ from opentelemetry.propagate import extract, inject
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 app = FastAPI()
 
@@ -102,10 +102,13 @@ async def send_chat(body: ChatRequest):
 
 
 async def queue_chat_message(session_id: str, message: str):
-    with tracer.start_as_current_span('api.send_chat') as span:
+    with tracer.start_as_current_span('api.send_chat', kind=SpanKind.SERVER) as span:
+        span.set_attribute('openinference.span.kind', 'CHAIN')
         span.set_attribute('chat.session_id', session_id)
         span.set_attribute('chat.message_length', len(message))
         span.set_attribute('chat.question_type', 'chat-question')
+        span.set_attribute('cache.hit', False)
+        span.set_attribute('cache.source', 'none')
         span.add_event('chat_request_received')
 
         payload = {
@@ -133,6 +136,12 @@ async def queue_chat_message(session_id: str, message: str):
                 orchestration = response.json()
                 span.set_attribute('chat.orchestration', orchestration.get('status', 'unknown'))
                 span.set_attribute('chat.orchestration.target', orchestration.get('target', 'none'))
+                cache_hit = bool(orchestration.get('cacheHit', False))
+                span.set_attribute('cache.hit', cache_hit)
+                if cache_hit:
+                    span.set_attribute('cache.source', 'redis-semantic-cache')
+                    if orchestration.get('similarityScore') is not None:
+                        span.set_attribute('cache.score', float(orchestration.get('similarityScore')))
                 span.add_event('langgraph_orchestration_complete')
             except Exception as exc:
                 span.set_attribute('chat.orchestration', 'fallback-queued')
@@ -174,6 +183,7 @@ async def chat_ws(websocket: WebSocket, session_id: str):
                 carrier = dict(msg.headers or {})
                 parent_context = extract(carrier)
                 with tracer.start_as_current_span('api.ws.emit', context=parent_context) as span:
+                    span.set_attribute('openinference.span.kind', 'CHAIN')
                     data = json.loads(msg.data.decode())
                     if data.get('sessionId') != session_id:
                         continue
@@ -181,6 +191,11 @@ async def chat_ws(websocket: WebSocket, session_id: str):
                     span.set_attribute('chat.session_id', session_id)
                     span.set_attribute('stream.transport', 'websocket')
                     span.set_attribute('stream.response_source', str(data.get('responseSource', 'unknown')))
+                    cache_hit = bool(data.get('cacheHit', False))
+                    span.set_attribute('cache.hit', cache_hit)
+                    span.set_attribute('cache.source', str(data.get('responseSource', 'none')) if cache_hit else 'none')
+                    if data.get('similarityScore') is not None:
+                        span.set_attribute('cache.score', float(data.get('similarityScore')))
                     reply = data.get('reply')
                     if isinstance(reply, str) and reply.strip():
                         words = reply.split()
@@ -212,6 +227,7 @@ async def chat_ws(websocket: WebSocket, session_id: str):
         while True:
             raw_message = await websocket.receive_text()
             with tracer.start_as_current_span('api.ws.receive') as span:
+                span.set_attribute('openinference.span.kind', 'CHAIN')
                 span.set_attribute('chat.session_id', session_id)
                 span.set_attribute('stream.transport', 'websocket')
 

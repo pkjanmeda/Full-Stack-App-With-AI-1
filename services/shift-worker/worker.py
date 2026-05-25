@@ -12,7 +12,7 @@ from opentelemetry.propagate import extract, inject
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
 tracer = trace.get_tracer(__name__)
@@ -87,7 +87,11 @@ async def main():
 
         incoming_headers = dict(msg.headers or {})
         parent_context = extract(incoming_headers)
-        with tracer.start_as_current_span('worker.shift.process', context=parent_context) as span:
+        with tracer.start_as_current_span('worker.shift.process', context=parent_context, kind=SpanKind.CONSUMER) as span:
+            span.set_attribute('openinference.span.kind', 'TOOL')
+            span.set_attribute('cache.hit', False)
+            span.set_attribute('cache.source', 'none')
+            span.set_attribute('cache.score', 0.0)
             try:
                 payload = json.loads(msg.data.decode())
                 message = payload.get('message', '')
