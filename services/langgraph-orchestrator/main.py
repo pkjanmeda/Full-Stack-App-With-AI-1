@@ -56,6 +56,18 @@ NAME_QUERY_PATTERNS = [
     re.compile(r"\bwho am i\b", re.IGNORECASE),
 ]
 
+SHIFT_ANALYTICS_PATTERNS = [
+    re.compile(r"\bshift\s+summary\b", re.IGNORECASE),
+    re.compile(r"\bshift\b", re.IGNORECASE),
+    re.compile(r"\bwho worked\b", re.IGNORECASE),
+    re.compile(r"\bworkers?\b", re.IGNORECASE),
+    re.compile(r"\bforms?\b", re.IGNORECASE),
+    re.compile(r"\btotal\s+products?\b", re.IGNORECASE),
+    re.compile(r"\bproducts?\s+produced\b", re.IGNORECASE),
+    re.compile(r"\bproduction\s+line\b", re.IGNORECASE),
+    re.compile(r"\bline\s*[a-z0-9]+\b", re.IGNORECASE),
+]
+
 
 class OrchestrationRequest(BaseModel):
     sessionId: str
@@ -131,6 +143,10 @@ def is_greeting(message: str) -> bool:
     if normalized in GREETING_TERMS:
         return True
     return any(normalized.startswith(term + ' ') for term in GREETING_TERMS)
+
+
+def is_shift_analytics_query(message: str) -> bool:
+    return any(pattern.search(message) for pattern in SHIFT_ANALYTICS_PATTERNS)
 
 
 async def publish_stream(subject: str, payload: dict):
@@ -379,11 +395,32 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
 
             span.set_attribute('semantic_cache.hit', False)
 
-        matched_nodes = [node.id for node in graph.nodes.values() if node.matches(message)]
+        shift_intent = is_shift_analytics_query(message)
+        shift_node = graph.get_node('shift-agent')
+
+        if shift_intent and shift_node is not None:
+            selected_node = shift_node
+            matched_nodes = [selected_node.id]
+            span.set_attribute('orchestration.intent', 'shift-analytics')
+        else:
+            # Keep existing routing behavior but avoid routing to shift-worker unless
+            # explicit shift-analytics intent is detected.
+            non_shift_nodes = [node for node in graph.nodes.values() if node.id != 'shift-agent']
+            matched_nodes = [node.id for node in non_shift_nodes if node.matches(message)]
+            selected_node = (
+                sorted(
+                    [node for node in non_shift_nodes if node.matches(message)],
+                    key=lambda node: node.priority,
+                    reverse=True,
+                )[0]
+                if matched_nodes
+                else None
+            )
+            span.set_attribute('orchestration.intent', 'standard-routing')
+
         span.set_attribute('orchestration.candidate_count', len(matched_nodes))
         span.set_attribute('orchestration.candidates', ','.join(matched_nodes) if matched_nodes else 'none')
 
-        selected_node = graph.find_best_node(message)
         if selected_node:
             span.set_attribute('orchestration.status', 'forwarded')
             span.set_attribute('orchestration.target', selected_node.id)

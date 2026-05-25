@@ -1,16 +1,13 @@
+import re
 import time
 from typing import List
 
 from azure.core.exceptions import ServiceRequestError
 from azure.cosmos import CosmosClient, PartitionKey
-from azure.cosmos.exceptions import (
-    CosmosHttpResponseError,
-    CosmosResourceExistsError,
-    CosmosResourceNotFoundError,
-)
+from azure.cosmos.exceptions import CosmosResourceExistsError, CosmosResourceNotFoundError
 
 
-class CosmosKpiStore:
+class CosmosShiftStore:
     def __init__(
         self,
         endpoint: str,
@@ -31,14 +28,7 @@ class CosmosKpiStore:
         try:
             return CosmosClient(self.endpoint, credential=self.key, connection_verify=False)
         except (AttributeError, Exception) as e:
-            raise ServiceRequestError(f"Failed to create Cosmos client: {e}") from e
-
-    def _is_retryable_http_error(self, exc: CosmosHttpResponseError) -> bool:
-        status = getattr(exc, 'status_code', None)
-        if status in {408, 429, 500, 503, 504}:
-            return True
-        message = str(exc)
-        return 'ServiceUnavailable' in message or 'TooManyRequests' in message
+            raise ServiceRequestError(f'Failed to create Cosmos client: {e}') from e
 
     def _get_container(self):
         client = self._create_client()
@@ -69,13 +59,7 @@ class CosmosKpiStore:
                 pass
             return database.get_container_client(self.container_name)
 
-    def _seed_if_empty(self, container):
-        count_query = 'SELECT VALUE COUNT(1) FROM c'
-        count_items = list(container.query_items(query=count_query, enable_cross_partition_query=True))
-        existing_count = count_items[0] if count_items else 0
-        if existing_count > 0:
-            return
-
+    def _ensure_seed_documents(self, container):
         for doc in self.seed_documents:
             container.upsert_item(doc)
 
@@ -83,15 +67,9 @@ class CosmosKpiStore:
         for attempt in range(1, retries + 1):
             try:
                 container = self._get_container()
-                self._seed_if_empty(container)
+                self._ensure_seed_documents(container)
                 print(f'Cosmos resources ready: {self.database_name}.{self.container_name}')
                 return True
-            except CosmosHttpResponseError as exc:
-                if not self._is_retryable_http_error(exc) or attempt == retries:
-                    print(f'Cosmos bootstrap failed after {retries} attempts: {exc}')
-                    return False
-                print(f'Cosmos transient HTTP error (attempt {attempt}/{retries}): {exc}')
-                time.sleep(delay_seconds)
             except ServiceRequestError as exc:
                 if attempt == retries:
                     print(f'Cosmos bootstrap failed after {retries} attempts: {exc}')
@@ -121,12 +99,6 @@ class CosmosKpiStore:
                         enable_cross_partition_query=True,
                     )
                 )
-            except CosmosHttpResponseError as exc:
-                if not self._is_retryable_http_error(exc) or attempt == retries:
-                    print(f'Cosmos query failed after {retries} attempts: {exc}')
-                    return []
-                print(f'Cosmos transient HTTP error (attempt {attempt}/{retries}): {exc}')
-                time.sleep(delay_seconds)
             except ServiceRequestError as exc:
                 if attempt == retries:
                     print(f'Cosmos query failed after {retries} attempts: {exc}')
@@ -135,3 +107,28 @@ class CosmosKpiStore:
                 time.sleep(delay_seconds)
 
         return []
+
+
+def extract_line_hint(message: str):
+    lower = message.lower()
+    line_match = re.search(r'\bline\s*([a-z0-9]+)\b', lower)
+    if line_match:
+        return f"Line{line_match.group(1).upper()}"
+    return None
+
+
+def extract_shift_hint(message: str, default_shift: str = 'shift3'):
+    lower = message.lower()
+
+    numeric = re.search(r'\bshift\s*([1-3])\b', lower)
+    if numeric:
+        return f"shift{numeric.group(1)}", True
+
+    if 'first shift' in lower or 'shift one' in lower:
+        return 'shift1', True
+    if 'second shift' in lower or 'shift two' in lower:
+        return 'shift2', True
+    if 'third shift' in lower or 'shift three' in lower:
+        return 'shift3', True
+
+    return default_shift, False
