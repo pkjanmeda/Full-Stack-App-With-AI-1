@@ -24,9 +24,11 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [hasSubmittedFirstMessage, setHasSubmittedFirstMessage] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const chatWindowRef = useRef<HTMLElement | null>(null);
 
   const applyAgentChunk = (data: StreamMessage) => {
       if (typeof data.reply !== 'string') return;
+      const reply = data.reply;
 
       setChat((prev) => {
         if (data.isPartial) {
@@ -36,12 +38,12 @@ function App() {
               ...prev.slice(0, -1),
               {
                 ...last,
-                text: data.reply!,
+                text: reply,
                 cacheHit: typeof data.cacheHit === 'boolean' ? data.cacheHit : last.cacheHit,
               },
             ];
           }
-          return [...prev, { sender: 'agent', text: data.reply!, cacheHit: data.cacheHit }];
+          return [...prev, { sender: 'agent', text: reply, cacheHit: data.cacheHit }];
         }
 
         const last = prev[prev.length - 1];
@@ -50,12 +52,12 @@ function App() {
             ...prev.slice(0, -1),
             {
               ...last,
-              text: data.reply,
+              text: reply,
               cacheHit: typeof data.cacheHit === 'boolean' ? data.cacheHit : last.cacheHit,
             },
           ];
         }
-        return [...prev, { sender: 'agent', text: data.reply, cacheHit: data.cacheHit }];
+        return [...prev, { sender: 'agent', text: reply, cacheHit: data.cacheHit }];
       });
   };
 
@@ -123,6 +125,12 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const chatWindow = chatWindowRef.current;
+    if (!chatWindow) return;
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+  }, [chat]);
+
   const sendMessage = async () => {
     if (!message.trim()) return;
     const outgoingMessage = message;
@@ -161,7 +169,7 @@ function App() {
         <h1>AI Chat Stream</h1>
         <p>Status: {connected ? 'Connected' : 'Disconnected'}</p>
       </header>
-      <section className="chat-window">
+      <section ref={chatWindowRef} className="chat-window">
         {chat.map((line, idx) => (
           <div key={idx} className={`chat-line ${line.sender}`}>
             <span>{line.sender === 'user' ? 'You' : 'Agent'}</span>
