@@ -50,6 +50,8 @@ The `api` and `langgraph` services include OpenTelemetry tracing.
 
 By default, this repo runs Arize Phoenix locally in Docker and sends traces to it.
 
+The local Phoenix container is for tracing and UI inspection. It is not a drop-in replacement for Arize Cloud dataset APIs used by `ax datasets`.
+
 1. Start the stack:
    ```bash
    docker compose up --build
@@ -69,6 +71,8 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an empty value to disable telemetry export.
 ## Local Phoenix Regression Check (One Command)
 
 Use the starter eval dataset and run replay plus pass/fail scoring locally.
+
+This is the supported local-only evaluation path in this repo. If you want to create managed datasets with `ax datasets`, use an Arize space/profile instead of the local Phoenix container.
 
 1. Install script dependency once:
    ```bash

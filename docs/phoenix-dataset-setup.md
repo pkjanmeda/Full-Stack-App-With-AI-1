@@ -5,6 +5,8 @@ This repo includes a starter eval dataset at:
 
 ## 1. Install and configure ax CLI (one time)
 
+This guide is for managed datasets in an Arize space. The local Phoenix container at `http://localhost:6006` does not expose the `spaces` and `datasets` API used by `ax datasets`.
+
 Windows PowerShell:
 - pip install arize-ax-cli
 
@@ -22,6 +24,8 @@ Note:
 - ax spaces list -o json --limit 20
 
 Copy the space name (or ID) you want to use.
+
+If you are staying fully local, skip this guide and use `python scripts/run_local_phoenix_regression.py` with the JSONL files in `datasets/evals/`.
 
 ## 3. Create dataset from starter file
 

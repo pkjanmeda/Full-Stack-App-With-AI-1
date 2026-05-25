@@ -2,6 +2,8 @@
 
 This runbook gives a repeatable sequence to create a dataset and run evals for this project.
 
+Use the dataset steps below only with an Arize space/profile. The repo's local Phoenix container does not implement the cloud `spaces` or `datasets` endpoints that `ax` expects.
+
 ## Prerequisites
 
 1. ax CLI installed and available:
@@ -13,6 +15,8 @@ This runbook gives a repeatable sequence to create a dataset and run evals for t
 
 3. Running app stack with trace emission:
 - docker compose up -d
+
+For a local-only regression run without managed datasets, use `python scripts/run_local_phoenix_regression.py` instead.
 
 ## Step 1: Create or update dataset
 
