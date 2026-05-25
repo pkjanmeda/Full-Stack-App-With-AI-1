@@ -1,197 +1,199 @@
 project:
   name: full-stack-ai-chat-stream
   description: |
-    Modular, scalable full-stack web application with a chat interface, API endpoint,
-    NATS JetStream-based backend streaming, worker pool running AI agents, and local
-    container deployment. Workers should be designed to run on the LangGraph platform.
+    Containerized full-stack chat system with LangGraph-based routing, NATS JetStream
+    messaging, specialized workers, Cosmos-backed KPI retrieval, and local Arize Phoenix
+    tracing via OpenTelemetry.
+  status: active
 
 goals:
-  - Provide a lightweight web chat UI with live streaming response support.
-  - Offer a REST API endpoint for the chat frontend to submit messages.
-  - Use NATS JetStream for backend message brokering and streaming responses.
-  - Implement a worker pool that consumes messages, executes AI-style agents, and
-    publishes generated content back into JetStream.
-  - Enable all services to run locally in containers through Docker Compose.
-  - Keep the architecture modular and scalable, with clear service boundaries.
+  - Provide a simple web chat UI with live server-sent streaming updates.
+  - Route each chat request through a local LangGraph orchestrator service.
+  - Process domain tasks using separate worker services (shift and KPI).
+  - Persist and query KPI demo data through a local Cosmos emulator.
+  - Run all components locally with Docker Compose.
+  - Expose distributed trace data to a local Arize Phoenix instance.
+
+runtime:
+  orchestrator: docker-compose
+  primary_ports:
+    frontend: 3000
+    api: 4000
+    langgraph: 5000
+    phoenix: 6006
+    nats_client: 4222
+    nats_monitoring: 8222
 
 architecture:
   components:
     frontend:
-      type: web application
+      type: react + vite web client
+      path: services/frontend
       responsibilities:
-        - render chat UI and conversation history
-        - send user messages to the API endpoint
-        - receive streamed AI responses from a streaming endpoint
-      technology-suggestions:
-        - React or Vue for UI
-        - TypeScript for type safety
-        - Fetch API + EventSource / WebSocket for streaming
+        - send POST /api/chat with sessionId and message
+        - open EventSource to /api/chat/stream
+        - render agent responses as incremental partial updates
 
-    api_service:
-      type: backend REST/API service
+    api:
+      type: fastapi gateway
+      path: services/api
       responsibilities:
-        - accept inbound chat messages from the frontend
-        - validate request payloads and session metadata
-        - publish incoming messages to a NATS JetStream 'incoming' stream
-        - optionally provide a streaming endpoint for response delivery (SSE/WebSocket)
-      technology-suggestions:
-        - Node.js + Express or Fastify
-        - Python + FastAPI
-        - TypeScript if using Node.js
+        - accept chat requests at /api/chat
+        - call langgraph /orchestrate first
+        - fallback publish to chat.incoming if langgraph call fails
+        - stream session-filtered chat.response events over SSE
+        - emit streamed words at ~100ms intervals for visible tokenized output
 
-    nats_jetstream:
-      type: message broker / event bus
+    langgraph:
+      type: fastapi orchestration service
+      path: services/langgraph
       responsibilities:
-        - host a JetStream stream for inbound user messages
-        - host a JetStream stream for worker responses
-        - support durable consumers, acknowledgements, and ordered delivery
-      configuration:
-        streams:
-          - name: chat_incoming
-            subjects: ["chat.incoming"]
-          - name: chat_response
-            subjects: ["chat.response"]
-        consumers:
-          - name: worker_consumer
-            stream: chat_incoming
-            deliver_policy: all
-            ack_policy: explicit
+        - evaluate incoming message against local graph node keyword rules
+        - route shift messages to subject chat.incoming
+        - route KPI messages to subject chat.kpi
+        - publish decline response directly to chat.response when unmatched
 
-    worker_pool:
-      type: containerized worker service
+    shift_worker:
+      type: nats jetstream worker
+      path: services/shift-worker
       responsibilities:
-        - subscribe to NATS JetStream chat_incoming messages
-        - execute a simple AI agent pipeline for each message
-        - enrich or randomize response text using small tool plugins
-        - publish responses to the chat_response stream
-      requirements:
-        - support horizontal scaling via multiple worker instances
-        - use durable JetStream consumer group or queue subscription
-      example-tools:
-        - random_text_inserter: add playful phrases or randomized facts
-        - format_helper: ensure responses include metadata or voice style
-        - session_mapper: attach session IDs and trace IDs to responses
+        - consume chat.incoming (durable consumer worker_pool)
+        - generate randomized shift-style response text
+        - publish response to chat.response
 
-    langgraph_runtime:
-      type: worker orchestration/integration
+    kpi_worker:
+      type: nats jetstream + cosmos worker
+      path: services/kpi-worker
       responsibilities:
-        - run worker AI agents on the LangGraph platform
-        - expose a local development mode for LangGraph-based execution
-        - connect LangGraph tasks to the worker pool logic
-      notes: |
-        The LangGraph platform should be used to host and orchestrate AI agent behavior.
-        Workers may contain a small LangGraph agent definition, tool registration, and
-        runtime adapter to invoke tools in a local container environment.
+        - consume chat.kpi (durable consumer kpi_worker_pool)
+        - query cosmos-emulator dataset for KPI/product metrics
+        - publish KPI response to chat.response with kpiHits metadata
+
+    nats:
+      type: nats jetstream broker
+      responsibilities:
+        - host stream chat_incoming for subject chat.incoming
+        - host stream chat_kpi for subject chat.kpi
+        - host stream chat_response for subject chat.response
+
+    cosmos_emulator:
+      type: local azure cosmos emulator service
+      path: services/cosmos-emulator
+      responsibilities:
+        - provide local Cosmos API endpoint for KPI worker
+        - persist seeded synthetic KPI documents
+
+    phoenix:
+      type: arize phoenix observability backend
+      responsibilities:
+        - receive OTLP traces from services
+        - provide local trace visualization UI
 
 message_flow:
-  - user enters text in frontend chat interface
-  - frontend sends POST /api/chat with payload { sessionId, message }
-  - API service publishes message to NATS JetStream subject chat.incoming
-  - worker pool consumers receive the message from chat_incoming stream
-  - each worker executes AI agent logic and enriches text using tools
-  - worker publishes completed response to NATS JetStream subject chat.response
-  - API service or frontend subscribes to chat.response stream and streams updates
-  - frontend renders partial or full streamed response live in chat UI
+  - frontend POSTs message to api /api/chat
+  - api starts trace span and forwards request to langgraph /orchestrate
+  - langgraph selects target route (chat.incoming, chat.kpi, or direct decline)
+  - selected worker consumes routed message and publishes chat.response
+  - api SSE endpoint subscribes to chat.response and filters by sessionId
+  - api emits partial word-by-word updates and final message to frontend
 
-api_spec:
+api_contract:
   endpoints:
     - path: /api/chat
       method: POST
-      description: send a user message
-      request:
-        content-type: application/json
-        body:
-          sessionId: string
-          message: string
+      request_body:
+        sessionId: string | null
+        message: string
       response:
-        200:
-          body: { status: "queued", messageId: string }
+        status: queued
+        messageId: string
+        sessionId: string
+        orchestration: forwarded | declined | null
+
     - path: /api/chat/stream
       method: GET
-      description: subscribe to response stream for a session
       query:
         sessionId: string
       response:
-        content-type: text/event-stream or application/json chunked
+        content_type: text/event-stream
+        event: message
+        payload_fields:
+          - sessionId
+          - reply
+          - isPartial
+          - responseSource
 
-frontend_features:
-  - chat bubble UI with timestamps and sender labels
-  - input box with send button and enter-to-submit
-  - streaming response rendering (text appended as it arrives)
-  - connection state indicator and retry behavior
-  - optional session selector or conversation history
+    - path: /orchestrate
+      method: POST
+      owner: langgraph
+      request_body:
+        sessionId: string
+        task: string
+        payload:
+          message: string
+      response:
+        status: forwarded | declined
+        target: string | null
+
+telemetry:
+  provider: opentelemetry
+  local_backend: arize phoenix
+  transport: otlp http
+  context_propagation:
+    - http headers between api and langgraph
+    - nats message headers between langgraph/workers/api
+  key_annotations:
+    - chat.session_id
+    - chat.message_length
+    - chat.orchestration
+    - orchestration.target
+    - orchestration.candidates
+    - orchestration.matched_keywords
+    - stream.word_count
+    - stream.first_chunk_latency_ms
+    - stream.total_duration_ms
+    - kpi.query.hit_count
 
 deployment:
-  targeting: local container development with Docker Compose
-  containers:
-    - name: nats
-      image: nats:latest
-      ports: [4222, 8222]
-      volumes:
-        - ./nats/data:/data
-      command: ["-js"]
-    - name: api
-      build: ./services/api
-      depends_on: [nats]
-      environment:
-        - NATS_URL=nats://nats:4222
-    - name: frontend
-      build: ./services/frontend
-      ports: [3000:3000]
-      depends_on: [api]
-    - name: shift-worker
-      build: ./services/shift-worker
-      depends_on: [nats]
-      environment:
-        - NATS_URL=nats://nats:4222
-    - name: kpi-worker
-      build: ./services/kpi-worker
-      depends_on: [nats]
-      environment:
-        - NATS_URL=nats://nats:4222
-    - name: langgraph_agent
-      build: ./services/langgraph
-      depends_on: [shift-worker, kpi-worker]
-      environment:
-        - LANGGRAPH_MODE=local
-        - NATS_URL=nats://nats:4222
-
-scalability:
-  - separate backend, frontend, message broker, and worker responsibilities
-  - decouple streaming from request handling with JetStream
-  - make worker instances stateless and horizontally scalable
-  - use environment variables for broker, service, and LangGraph configuration
-  - add service-specific logs and structured tracing fields
-  - design modules with clear boundaries and small adapter layers
-
-local_dev:
-  - run NATS JetStream locally via Docker Compose
-  - start API and frontend containers together
-  - verify worker pool can connect to NATS and process sample messages
-  - optionally start a local LangGraph runtime or mock if not available
+  compose_file: docker-compose.yml
+  services:
+    - phoenix
+    - nats
+    - cosmos-emulator
+    - api
+    - frontend
+    - shift-worker
+    - kpi-worker
+    - langgraph
+  required_env:
+    - NATS_URL
+    - LANGGRAPH_URL
+    - LANGGRAPH_MODE
+    - OTEL_EXPORTER_OTLP_ENDPOINT
+    - OTEL_EXPORTER_OTLP_HEADERS
 
 project_structure:
-  - services/
-    - api/
-    - frontend/
-    - worker/
-    - langgraph/
+  - services/api
+  - services/frontend
+  - services/langgraph
+  - services/shift-worker
+  - services/kpi-worker
+  - services/cosmos-emulator
+  - nats
+  - phoenix
   - docker-compose.yml
   - project-spec.yaml
   - README.md
-  - .env.example
-  - nats/
 
-quality:
-  - modular code with clearly separated service directories
-  - small interfaces for NATS publish/subscribe and message formats
-  - simple automated tests for API endpoint and worker processing
-  - documented startup instructions and local environment variables
+current_limits:
+  - routing is keyword-based and local (no external LLM provider)
+  - no auth/rbac layer
+  - no formal automated test suite committed yet
+  - compose file still includes deprecated top-level version key
 
 success_criteria:
-  - frontend chat UI sends a message and receives a streamed response
-  - API publishes inbound messages to JetStream correctly
-  - worker pool processes messages and publishes valid responses
-  - NATS JetStream streams are configured and durable for local testing
-  - entire stack can be started with Docker Compose locally
-  - LangGraph worker integration is scaffolded and callable from workers
+  - frontend sends chat and receives progressive streamed response
+  - langgraph routes to appropriate subject or decline path
+  - workers process and publish chat.response reliably
+  - kpi-worker can query seeded cosmos data
+  - phoenix shows cross-service traces with propagated context
