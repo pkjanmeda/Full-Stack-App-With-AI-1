@@ -8,11 +8,12 @@ project:
 
 goals:
   - Provide a simple web chat UI with live WebSocket streaming updates.
+  - Allow users to manage multiple conversations with independent thread IDs.
   - Route each chat request through a local LangGraph orchestrator service.
   - Maintain short-term per-session conversation memory in Redis.
   - Use semantic cache lookup in Redis before running full routing/worker flow.
   - Process domain tasks using separate worker services (shift and KPI).
-  - Persist and query KPI demo data through a local Cosmos emulator.
+  - Persist and query shift and KPI demo data through a local Cosmos emulator.
   - Run all components locally with Docker Compose.
   - Expose distributed trace data to a local Arize Phoenix instance.
 
@@ -32,6 +33,8 @@ architecture:
       type: react + vite web client
       path: services/frontend
       responsibilities:
+        - create and switch multiple conversations, each with its own thread/session id
+        - preserve independent chat history per conversation
         - send POST /api/chat with sessionId and message
         - open WebSocket to /api/chat/ws/{sessionId} after first POST
         - send optional follow-up questions over the same WebSocket connection
@@ -53,10 +56,11 @@ architecture:
       type: fastapi orchestration service
       path: services/langgraph-orchestrator
       responsibilities:
+        - handle basic conversational intents (greeting, save-name, recall-name)
         - perform semantic cache search against Redis memory
         - store short-term conversation turns in Redis per session
         - evaluate incoming message against local graph node keyword rules
-        - route shift messages to subject chat.incoming
+        - route only shift-analytics intent traffic to subject chat.incoming
         - route KPI messages to subject chat.kpi
         - publish decline response directly to chat.response when unmatched
 
@@ -71,7 +75,9 @@ architecture:
       path: services/shift-worker
       responsibilities:
         - consume chat.incoming (durable consumer worker_pool)
-        - generate randomized shift-style response text
+        - query cosmos-emulator shift dataset (workers/forms/production by shift)
+        - default to shift3 when shift is not specified in the user query
+        - return user-safe retry guidance when transient data fetch failures occur
         - publish response to chat.response
 
     kpi_worker:
@@ -80,6 +86,7 @@ architecture:
       responsibilities:
         - consume chat.kpi (durable consumer kpi_worker_pool)
         - query cosmos-emulator dataset for KPI/product metrics
+        - return user-safe retry guidance when transient data fetch failures occur
         - publish KPI response to chat.response with kpiHits metadata
 
     nats:
@@ -93,8 +100,8 @@ architecture:
       type: local azure cosmos emulator service
       path: services/cosmos-emulator
       responsibilities:
-        - provide local Cosmos API endpoint for KPI worker
-        - persist seeded synthetic KPI documents
+        - provide local Cosmos API endpoint for shift and KPI workers
+        - persist seeded synthetic shift and KPI documents
 
     phoenix:
       type: arize phoenix observability backend
@@ -103,13 +110,16 @@ architecture:
         - provide local trace visualization UI
 
 message_flow:
+  - frontend creates/selects a conversation and uses its thread ID as sessionId
   - frontend POSTs message to api /api/chat
   - frontend opens websocket to /api/chat/ws/{sessionId}
   - api starts trace span and forwards request to langgraph-orchestrator /orchestrate
+  - langgraph-orchestrator can answer basic greeting/name intents directly
   - langgraph-orchestrator checks redis semantic memory for similar prior question in same session
   - if similarity is above threshold, langgraph-orchestrator publishes cached response directly
-  - langgraph-orchestrator selects target route (chat.incoming, chat.kpi, or direct decline)
+  - langgraph-orchestrator routes shift-analytics intent to chat.incoming and KPI intent to chat.kpi, otherwise declines
   - selected worker consumes routed message and publishes chat.response
+  - on transient worker data failures, worker publishes a generic retry-later response instead of crashing
   - api websocket session subscribes to chat.response and filters by sessionId
   - frontend may send follow-up messages through websocket to api
   - api emits partial word-by-word updates and final message to frontend
@@ -161,12 +171,15 @@ telemetry:
     - http headers between api and langgraph-orchestrator
     - nats message headers between langgraph-orchestrator/workers/api websocket stream
   key_annotations:
+    - input.value
+    - output.value
     - chat.session_id
     - chat.message_length
     - chat.orchestration
     - orchestration.target
     - orchestration.candidates
     - orchestration.matched_keywords
+    - shift.query.hit_count
     - stream.word_count
     - stream.first_chunk_latency_ms
     - stream.total_duration_ms
@@ -188,6 +201,10 @@ deployment:
     - NATS_URL
     - LANGGRAPH_URL
     - LANGGRAPH_MODE
+    - COSMOS_ENDPOINT
+    - COSMOS_KEY
+    - COSMOS_DB
+    - COSMOS_CONTAINER
     - OTEL_EXPORTER_OTLP_ENDPOINT
     - OTEL_EXPORTER_OTLP_HEADERS
 
@@ -211,8 +228,10 @@ current_limits:
   - compose file still includes deprecated top-level version key
 
 success_criteria:
+  - frontend supports multiple independent conversations mapped to distinct thread IDs
   - frontend sends chat and receives progressive streamed response
   - langgraph-orchestrator routes to appropriate subject or decline path
+  - shift-worker can query seeded cosmos shift data with shift1/shift2/shift3 support
   - workers process and publish chat.response reliably
   - kpi-worker can query seeded cosmos data
   - phoenix shows cross-service traces with propagated context
