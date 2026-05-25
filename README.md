@@ -5,7 +5,7 @@ This repository contains a modular full-stack application with:
 - Python FastAPI backend service to publish messages into NATS JetStream
 - NATS JetStream backend for message streaming
 - Python `shift-worker` that consumes messages and publishes randomized test responses
-- Python `langgraph` orchestration service stub for local workflow coordination
+- Python `langgraph-orchestrator` orchestration service stub for local workflow coordination
 
 ## Local setup
 
@@ -23,8 +23,8 @@ This repository contains a modular full-stack application with:
 - `api`: REST endpoint to accept user chat messages
 - `shift-worker`: JetStream consumer that processes shift-related chat questions and returns randomized responses
 - `kpi-worker`: JetStream consumer that processes KPI-related chat questions and queries the Cosmos emulator for product KPI data
-- `langgraph`: Python orchestration service for local LangGraph-style workflow
-- `redis`: short-term conversation memory and semantic cache backend for `langgraph`
+- `langgraph-orchestrator`: Python orchestration service for local LangGraph-style workflow
+- `redis`: short-term conversation memory and semantic cache backend for `langgraph-orchestrator`
 - `cosmos-emulator`: Cosmos DB emulator container with synthetic shift and KPI datasets
 - `nats`: NATS JetStream broker
 
@@ -46,7 +46,7 @@ This repository contains a modular full-stack application with:
 
 ## Tracing To Arize
 
-The `api` and `langgraph` services include OpenTelemetry tracing.
+The `api` and `langgraph-orchestrator` services include OpenTelemetry tracing.
 
 By default, this repo runs Arize Phoenix locally in Docker and sends traces to it.
 

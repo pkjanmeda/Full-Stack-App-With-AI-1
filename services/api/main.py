@@ -20,7 +20,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 app = FastAPI()
 
 NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
-LANGGRAPH_URL = os.getenv('LANGGRAPH_URL', 'http://langgraph:5000')
+LANGGRAPH_URL = os.getenv('LANGGRAPH_URL', 'http://langgraph-orchestrator:5000')
 
 nc = NATS()
 js = None

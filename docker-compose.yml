@@ -37,10 +37,10 @@ services:
     depends_on:
       - phoenix
       - nats
-      - langgraph
+      - langgraph-orchestrator
     environment:
       - NATS_URL=nats://nats:4222
-      - LANGGRAPH_URL=http://langgraph:5000
+      - LANGGRAPH_URL=http://langgraph-orchestrator:5000
       - PORT=4000
       - OTEL_SERVICE_NAME=api-service
       - OTEL_ENVIRONMENT=local
@@ -85,8 +85,8 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:6006/v1/traces}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
 
-  langgraph:
-    build: ./services/langgraph
+  langgraph-orchestrator:
+    build: ./services/langgraph-orchestrator
     depends_on:
       - phoenix
       - nats

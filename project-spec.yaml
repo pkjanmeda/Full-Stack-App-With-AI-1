@@ -21,7 +21,7 @@ runtime:
   primary_ports:
     frontend: 3000
     api: 4000
-    langgraph: 5000
+    langgraph-orchestrator: 5000
     phoenix: 6006
     nats_client: 4222
     nats_monitoring: 8222
@@ -42,16 +42,16 @@ architecture:
       path: services/api
       responsibilities:
         - accept first chat request at /api/chat
-        - call langgraph /orchestrate first
-        - fallback publish to chat.incoming if langgraph call fails
+        - call langgraph-orchestrator /orchestrate first
+        - fallback publish to chat.incoming if langgraph-orchestrator call fails
         - provide WebSocket endpoint /api/chat/ws/{sessionId}
         - stream session-filtered chat.response events over WebSocket
         - accept optional follow-up messages over WebSocket
         - emit streamed words at ~100ms intervals for visible tokenized output
 
-    langgraph:
+    langgraph-orchestrator:
       type: fastapi orchestration service
-      path: services/langgraph
+      path: services/langgraph-orchestrator
       responsibilities:
         - perform semantic cache search against Redis memory
         - store short-term conversation turns in Redis per session
@@ -105,10 +105,10 @@ architecture:
 message_flow:
   - frontend POSTs message to api /api/chat
   - frontend opens websocket to /api/chat/ws/{sessionId}
-  - api starts trace span and forwards request to langgraph /orchestrate
-  - langgraph checks redis semantic memory for similar prior question in same session
-  - if similarity is above threshold, langgraph publishes cached response directly
-  - langgraph selects target route (chat.incoming, chat.kpi, or direct decline)
+  - api starts trace span and forwards request to langgraph-orchestrator /orchestrate
+  - langgraph-orchestrator checks redis semantic memory for similar prior question in same session
+  - if similarity is above threshold, langgraph-orchestrator publishes cached response directly
+  - langgraph-orchestrator selects target route (chat.incoming, chat.kpi, or direct decline)
   - selected worker consumes routed message and publishes chat.response
   - api websocket session subscribes to chat.response and filters by sessionId
   - frontend may send follow-up messages through websocket to api
@@ -143,7 +143,7 @@ api_contract:
 
     - path: /orchestrate
       method: POST
-      owner: langgraph
+      owner: langgraph-orchestrator
       request_body:
         sessionId: string
         task: string
@@ -158,8 +158,8 @@ telemetry:
   local_backend: arize phoenix
   transport: otlp http
   context_propagation:
-    - http headers between api and langgraph
-    - nats message headers between langgraph/workers/api websocket stream
+    - http headers between api and langgraph-orchestrator
+    - nats message headers between langgraph-orchestrator/workers/api websocket stream
   key_annotations:
     - chat.session_id
     - chat.message_length
@@ -183,7 +183,7 @@ deployment:
     - frontend
     - shift-worker
     - kpi-worker
-    - langgraph
+    - langgraph-orchestrator
   required_env:
     - NATS_URL
     - LANGGRAPH_URL
@@ -194,7 +194,7 @@ deployment:
 project_structure:
   - services/api
   - services/frontend
-  - services/langgraph
+  - services/langgraph-orchestrator
   - services/shift-worker
   - services/kpi-worker
   - services/cosmos-emulator
@@ -212,7 +212,7 @@ current_limits:
 
 success_criteria:
   - frontend sends chat and receives progressive streamed response
-  - langgraph routes to appropriate subject or decline path
+  - langgraph-orchestrator routes to appropriate subject or decline path
   - workers process and publish chat.response reliably
   - kpi-worker can query seeded cosmos data
   - phoenix shows cross-service traces with propagated context
