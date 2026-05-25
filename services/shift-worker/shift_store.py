@@ -4,7 +4,11 @@ from typing import List
 
 from azure.core.exceptions import ServiceRequestError
 from azure.cosmos import CosmosClient, PartitionKey
-from azure.cosmos.exceptions import CosmosResourceExistsError, CosmosResourceNotFoundError
+from azure.cosmos.exceptions import (
+    CosmosHttpResponseError,
+    CosmosResourceExistsError,
+    CosmosResourceNotFoundError,
+)
 
 
 class CosmosShiftStore:
@@ -29,6 +33,13 @@ class CosmosShiftStore:
             return CosmosClient(self.endpoint, credential=self.key, connection_verify=False)
         except (AttributeError, Exception) as e:
             raise ServiceRequestError(f'Failed to create Cosmos client: {e}') from e
+
+    def _is_retryable_http_error(self, exc: CosmosHttpResponseError) -> bool:
+        status = getattr(exc, 'status_code', None)
+        if status in {408, 429, 500, 503, 504}:
+            return True
+        message = str(exc)
+        return 'ServiceUnavailable' in message or 'TooManyRequests' in message
 
     def _get_container(self):
         client = self._create_client()
@@ -70,6 +81,12 @@ class CosmosShiftStore:
                 self._ensure_seed_documents(container)
                 print(f'Cosmos resources ready: {self.database_name}.{self.container_name}')
                 return True
+            except CosmosHttpResponseError as exc:
+                if not self._is_retryable_http_error(exc) or attempt == retries:
+                    print(f'Cosmos bootstrap failed after {retries} attempts: {exc}')
+                    return False
+                print(f'Cosmos transient HTTP error (attempt {attempt}/{retries}): {exc}')
+                time.sleep(delay_seconds)
             except ServiceRequestError as exc:
                 if attempt == retries:
                     print(f'Cosmos bootstrap failed after {retries} attempts: {exc}')
@@ -99,6 +116,12 @@ class CosmosShiftStore:
                         enable_cross_partition_query=True,
                     )
                 )
+            except CosmosHttpResponseError as exc:
+                if not self._is_retryable_http_error(exc) or attempt == retries:
+                    print(f'Cosmos query failed after {retries} attempts: {exc}')
+                    return []
+                print(f'Cosmos transient HTTP error (attempt {attempt}/{retries}): {exc}')
+                time.sleep(delay_seconds)
             except ServiceRequestError as exc:
                 if attempt == retries:
                     print(f'Cosmos query failed after {retries} attempts: {exc}')

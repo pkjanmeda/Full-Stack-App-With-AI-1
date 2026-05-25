@@ -40,6 +40,15 @@ def normalize_text(value: str) -> str:
     return ' '.join(value.lower().split())
 
 
+def get_stream_tuning(word_count: int) -> tuple[int, float]:
+    # Keep short answers smooth and make long answers much faster.
+    if word_count <= 20:
+        return 1, 0.10
+    if word_count <= 50:
+        return 2, 0.06
+    return 3, 0.04
+
+
 def parse_otlp_headers(raw_headers: str) -> dict[str, str]:
     headers = {}
     for pair in raw_headers.split(','):
@@ -227,19 +236,25 @@ async def chat_ws(websocket: WebSocket, session_id: str):
                                 final_span.set_attribute('cache.score', float(data.get('similarityScore')))
 
                         words = reply.split()
-                        span.set_attribute('stream.word_count', len(words))
-                        span.set_attribute('stream.chunk_delay_ms', 100)
-                        partial = ''
-                        for index, word in enumerate(words, 1):
-                            partial = f'{partial} {word}'.strip()
+                        word_count = len(words)
+                        chunk_size, chunk_delay_seconds = get_stream_tuning(word_count)
+                        span.set_attribute('stream.word_count', word_count)
+                        span.set_attribute('stream.chunk_size', chunk_size)
+                        span.set_attribute('stream.chunk_delay_ms', int(chunk_delay_seconds * 1000))
+                        partial_words: list[str] = []
+                        chunk_index = 0
+                        for offset in range(0, word_count, chunk_size):
+                            partial_words.extend(words[offset : offset + chunk_size])
+                            partial = ' '.join(partial_words)
                             chunk = {**data, 'reply': partial, 'isPartial': True}
                             await websocket.send_json(chunk)
                             if not first_chunk_sent:
                                 first_chunk_latency_ms = int((perf_counter() - stream_started_at) * 1000)
                                 span.set_attribute('stream.first_chunk_latency_ms', first_chunk_latency_ms)
                                 first_chunk_sent = True
-                            span.add_event('stream_chunk_emitted', {'stream.chunk_index': index})
-                            await asyncio.sleep(0.1)
+                            chunk_index += 1
+                            span.add_event('stream_chunk_emitted', {'stream.chunk_index': chunk_index})
+                            await asyncio.sleep(chunk_delay_seconds)
                         final_chunk = {**data, 'reply': reply, 'isPartial': False}
                         await websocket.send_json(final_chunk)
                         span.add_event('stream_completed')

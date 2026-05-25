@@ -146,7 +146,24 @@ def is_greeting(message: str) -> bool:
 
 
 def is_shift_analytics_query(message: str) -> bool:
+    normalized = normalize_whitespace(message).lower()
+    if normalized in {'summary', 'summarize'}:
+        return True
     return any(pattern.search(message) for pattern in SHIFT_ANALYTICS_PATTERNS)
+
+
+def extract_shift_bucket(message: str) -> str:
+    lowered = message.lower()
+    if re.search(r'\bshift\s*1\b', lowered) or 'first shift' in lowered or 'shift one' in lowered:
+        return 'shift1'
+    if re.search(r'\bshift\s*2\b', lowered) or 'second shift' in lowered or 'shift two' in lowered:
+        return 'shift2'
+    if re.search(r'\bshift\s*3\b', lowered) or 'third shift' in lowered or 'shift three' in lowered:
+        return 'shift3'
+    # Shift analytics defaults to shift3 in the worker when no explicit shift is provided.
+    if is_shift_analytics_query(message):
+        return 'shift3'
+    return 'none'
 
 
 async def publish_stream(subject: str, payload: dict):
@@ -219,11 +236,13 @@ async def cache_response_messages():
             original_message = str(payload.get('originalMessage', '')).strip()
             source = str(payload.get('responseSource', 'unknown'))
             if session_id and reply and original_message:
+                context_tag = extract_shift_bucket(original_message)
                 await redis_memory.add_turn(
                     session_id=session_id,
                     user_message=original_message,
                     assistant_reply=reply,
                     source=source,
+                    context_tag=context_tag,
                 )
     except asyncio.CancelledError:
         pass
@@ -361,7 +380,12 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             )
 
         if redis_memory is not None:
-            cached_match = await redis_memory.search_similar(request.sessionId, message)
+            required_context_tag = extract_shift_bucket(message) if is_shift_analytics_query(message) else None
+            cached_match = await redis_memory.search_similar(
+                request.sessionId,
+                message,
+                required_context_tag=required_context_tag,
+            )
             if cached_match is not None:
                 span.set_attribute('orchestration.status', 'cache-hit')
                 span.set_attribute('semantic_cache.hit', True)
@@ -369,6 +393,8 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
                 span.set_attribute('cache.hit', True)
                 span.set_attribute('cache.source', 'redis-semantic-cache')
                 span.set_attribute('cache.score', cached_match.get('score', 0.0))
+                if required_context_tag:
+                    span.set_attribute('cache.shift', required_context_tag)
                 span.set_attribute('output.value', str(cached_match.get('reply', '')))
                 span.set_attribute('output.mime_type', 'text/plain')
                 span.add_event('semantic_cache_hit')

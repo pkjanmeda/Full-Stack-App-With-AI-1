@@ -194,6 +194,7 @@ async def main():
             span.set_attribute('cache.hit', False)
             span.set_attribute('cache.source', 'none')
             span.set_attribute('cache.score', 0.0)
+            payload = {}
             try:
                 payload = json.loads(msg.data.decode())
                 message = payload.get('message', '')
@@ -233,7 +234,41 @@ async def main():
             except Exception as exc:
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
-                raise
+                # Return a safe user-facing message instead of crashing the worker.
+                retry_message = (
+                    'I am unable to retrieve KPI data right now. '
+                    'Please try again in a few moments.'
+                )
+                try:
+                    outgoing_headers = {}
+                    inject(outgoing_headers)
+                    await js.publish(
+                        'chat.response',
+                        json.dumps(
+                            {
+                                'sessionId': str(payload.get('sessionId', '')),
+                                'reply': retry_message,
+                                'originalMessage': str(payload.get('message', '')),
+                                'timestamp': datetime.utcnow().isoformat() + 'Z',
+                                'responseSource': 'kpi-worker-fallback',
+                                'cacheHit': False,
+                            }
+                        ).encode(),
+                        headers=outgoing_headers,
+                    )
+                    span.set_attribute('nats.publish.subject', 'chat.response')
+                    span.set_attribute('output.value', retry_message)
+                    span.set_attribute('output.mime_type', 'text/plain')
+                except Exception:
+                    # Keep worker alive even if fallback response publish fails.
+                    pass
+
+                try:
+                    await msg.ack()
+                except Exception:
+                    pass
+
+                print('KPI worker transient failure; returned retry message to client.')
 
 
 if __name__ == '__main__':

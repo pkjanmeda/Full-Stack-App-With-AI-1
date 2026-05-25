@@ -24,6 +24,7 @@ COSMOS_KEY = os.getenv(
 COSMOS_DB = os.getenv('COSMOS_DB', 'factory_ops')
 COSMOS_CONTAINER = os.getenv('COSMOS_CONTAINER', 'shift_data')
 COSMOS_PARTITION_KEY = os.getenv('COSMOS_PARTITION_KEY', '/lineId')
+SHIFT_QUERY_TIMEOUT_SECONDS = float(os.getenv('SHIFT_QUERY_TIMEOUT_SECONDS', '10'))
 tracer = trace.get_tracer(__name__)
 
 
@@ -455,20 +456,20 @@ def summarize_shift_data(query_type: str, items: list[dict], shift_hint: str, sh
         return f'{shift_label}{shift_default_suffix}: data is currently unavailable for that request.'
 
     if query_type == 'worker_shift':
-        workers = [f"{item.get('operator', 'unknown')} ({item.get('lineId', 'n/a')})" for item in items[:5]]
+        workers = [f"{item.get('operator', 'unknown')} ({item.get('lineId', 'n/a')})" for item in items[:3]]
         return f'{shift_label}{shift_default_suffix} workers active by line: ' + ', '.join(workers) + '.'
 
     if query_type == 'forms_summary':
         entries = [
             f"{item.get('operator', 'unknown')} filled {item.get('formsFilled', 0)} forms on {item.get('lineId', 'n/a')} for {item.get('product', 'n/a')}"
-            for item in items[:5]
+            for item in items[:3]
         ]
         return f'{shift_label}{shift_default_suffix} forms summary: ' + '; '.join(entries) + '.'
 
     if query_type == 'production_total':
         entries = [
             f"{item.get('lineId', 'n/a')} produced {item.get('totalProduced', 0)} units of {item.get('product', 'n/a')}"
-            for item in items[:5]
+            for item in items[:3]
         ]
         return f'{shift_label}{shift_default_suffix} production totals: ' + '; '.join(entries) + '.'
 
@@ -507,6 +508,7 @@ async def main():
             span.set_attribute('cache.hit', False)
             span.set_attribute('cache.source', 'none')
             span.set_attribute('cache.score', 0.0)
+            payload = {}
             try:
                 payload = json.loads(msg.data.decode())
                 message = payload.get('message', '')
@@ -520,7 +522,13 @@ async def main():
                 span.add_event('worker_message_received')
 
                 query_type, query, parameters, shift_hint, shift_explicit = build_shift_query(message)
-                items = shift_store.query_with_retry(query=query, parameters=parameters)
+                try:
+                    items = await asyncio.wait_for(
+                        asyncio.to_thread(shift_store.query_with_retry, query, parameters),
+                        timeout=SHIFT_QUERY_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError as exc:
+                    raise RuntimeError('shift query timed out') from exc
                 response_text = summarize_shift_data(
                     query_type=query_type,
                     items=items,
@@ -552,7 +560,41 @@ async def main():
             except Exception as exc:
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
-                raise
+                # Return a safe user-facing message instead of crashing the worker.
+                retry_message = (
+                    'I am unable to retrieve shift data right now. '
+                    'Please try again in a few moments.'
+                )
+                try:
+                    outgoing_headers = {}
+                    inject(outgoing_headers)
+                    await js.publish(
+                        'chat.response',
+                        json.dumps(
+                            {
+                                'sessionId': str(payload.get('sessionId', '')),
+                                'reply': retry_message,
+                                'originalMessage': str(payload.get('message', '')),
+                                'timestamp': datetime.utcnow().isoformat() + 'Z',
+                                'responseSource': 'shift-worker-fallback',
+                                'cacheHit': False,
+                            }
+                        ).encode(),
+                        headers=outgoing_headers,
+                    )
+                    span.set_attribute('nats.publish.subject', 'chat.response')
+                    span.set_attribute('output.value', retry_message)
+                    span.set_attribute('output.mime_type', 'text/plain')
+                except Exception:
+                    # Keep worker alive even if fallback response publish fails.
+                    pass
+
+                try:
+                    await msg.ack()
+                except Exception:
+                    pass
+
+                print('Shift worker transient failure; returned retry message to client.')
 
 
 if __name__ == '__main__':

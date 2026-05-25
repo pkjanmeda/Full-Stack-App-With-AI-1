@@ -63,7 +63,14 @@ class RedisConversationMemory:
             return 0.0
         return sum(a[index] * b[index] for index in common)
 
-    async def add_turn(self, session_id: str, user_message: str, assistant_reply: str, source: str):
+    async def add_turn(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_reply: str,
+        source: str,
+        context_tag: str = 'none',
+    ):
         if self.client is None:
             return
 
@@ -74,13 +81,19 @@ class RedisConversationMemory:
             'userMessage': user_message,
             'assistantReply': assistant_reply,
             'source': source,
+            'contextTag': context_tag,
             'timestamp': datetime.utcnow().isoformat() + 'Z',
         }
         await client.lpush(key, json.dumps(payload))
         await client.ltrim(key, 0, self.max_turns - 1)
         await client.expire(key, self.ttl_seconds)
 
-    async def search_similar(self, session_id: str, query: str):
+    async def search_similar(
+        self,
+        session_id: str,
+        query: str,
+        required_context_tag: str | None = None,
+    ):
         if self.client is None:
             return None
 
@@ -105,6 +118,10 @@ class RedisConversationMemory:
             if not user_message or not response_text:
                 continue
 
+            item_context_tag = str(item.get('contextTag', 'none'))
+            if required_context_tag and item_context_tag != required_context_tag:
+                continue
+
             score = self._cosine_similarity(query_vector, self._vectorize(user_message))
             if score > best_score:
                 best_score = score
@@ -118,6 +135,7 @@ class RedisConversationMemory:
             'reply': best_match.get('assistantReply'),
             'matchedQuestion': best_match.get('userMessage'),
             'source': best_match.get('source', 'memory'),
+            'contextTag': best_match.get('contextTag', 'none'),
         }
 
     async def set_user_name(self, session_id: str, user_name: str):
