@@ -1,71 +1,101 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+function createConversation(index) {
+    return {
+        id: `thread-${Math.random().toString(36).slice(2, 10)}`,
+        title: `Conversation ${index}`,
+        chat: [],
+        connected: false,
+        hasSubmittedFirstMessage: false,
+    };
+}
 function App() {
-    const [sessionId] = useState(() => `session-${Math.random().toString(36).slice(2, 8)}`);
+    const [conversations, setConversations] = useState(() => [createConversation(1)]);
+    const [activeConversationId, setActiveConversationId] = useState('');
     const [message, setMessage] = useState('');
-    const [chat, setChat] = useState([]);
-    const [connected, setConnected] = useState(false);
-    const [hasSubmittedFirstMessage, setHasSubmittedFirstMessage] = useState(false);
-    const wsRef = useRef(null);
+    const wsRef = useRef({});
     const chatWindowRef = useRef(null);
-    const applyAgentChunk = (data) => {
+    const activeConversation = useMemo(() => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0], [activeConversationId, conversations]);
+    const applyAgentChunk = (conversationId, data) => {
         if (typeof data.reply !== 'string')
             return;
         const reply = data.reply;
-        setChat((prev) => {
+        setConversations((prev) => prev.map((conversation) => {
+            if (conversation.id !== conversationId)
+                return conversation;
+            const currentChat = conversation.chat;
             if (data.isPartial) {
-                const last = prev[prev.length - 1];
+                const last = currentChat[currentChat.length - 1];
                 if (last?.sender === 'agent') {
-                    return [
-                        ...prev.slice(0, -1),
+                    return {
+                        ...conversation,
+                        chat: [
+                            ...currentChat.slice(0, -1),
+                            {
+                                ...last,
+                                text: reply,
+                                cacheHit: typeof data.cacheHit === 'boolean' ? data.cacheHit : last.cacheHit,
+                            },
+                        ],
+                    };
+                }
+                return {
+                    ...conversation,
+                    chat: [...currentChat, { sender: 'agent', text: reply, cacheHit: data.cacheHit }],
+                };
+            }
+            const last = currentChat[currentChat.length - 1];
+            if (last?.sender === 'agent') {
+                return {
+                    ...conversation,
+                    chat: [
+                        ...currentChat.slice(0, -1),
                         {
                             ...last,
                             text: reply,
                             cacheHit: typeof data.cacheHit === 'boolean' ? data.cacheHit : last.cacheHit,
                         },
-                    ];
-                }
-                return [...prev, { sender: 'agent', text: reply, cacheHit: data.cacheHit }];
+                    ],
+                };
             }
-            const last = prev[prev.length - 1];
-            if (last?.sender === 'agent') {
-                return [
-                    ...prev.slice(0, -1),
-                    {
-                        ...last,
-                        text: reply,
-                        cacheHit: typeof data.cacheHit === 'boolean' ? data.cacheHit : last.cacheHit,
-                    },
-                ];
-            }
-            return [...prev, { sender: 'agent', text: reply, cacheHit: data.cacheHit }];
-        });
+            return {
+                ...conversation,
+                chat: [...currentChat, { sender: 'agent', text: reply, cacheHit: data.cacheHit }],
+            };
+        }));
     };
-    const connectWebSocket = () => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            return wsRef.current;
+    const connectWebSocket = (conversationId) => {
+        const existing = wsRef.current[conversationId];
+        if (existing && existing.readyState === WebSocket.OPEN) {
+            return existing;
         }
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const ws = new WebSocket(`${protocol}://${window.location.host}/api/chat/ws/${sessionId}`);
-        ws.onopen = () => setConnected(true);
-        ws.onerror = () => setConnected(false);
-        ws.onclose = () => setConnected(false);
+        const ws = new WebSocket(`${protocol}://${window.location.host}/api/chat/ws/${conversationId}`);
+        ws.onopen = () => {
+            setConversations((prev) => prev.map((conversation) => conversation.id === conversationId ? { ...conversation, connected: true } : conversation));
+        };
+        ws.onerror = () => {
+            setConversations((prev) => prev.map((conversation) => conversation.id === conversationId ? { ...conversation, connected: false } : conversation));
+        };
+        ws.onclose = () => {
+            setConversations((prev) => prev.map((conversation) => conversation.id === conversationId ? { ...conversation, connected: false } : conversation));
+        };
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.type === 'ack' || data.type === 'error') {
                 return;
             }
-            applyAgentChunk(data);
+            applyAgentChunk(conversationId, data);
         };
-        wsRef.current = ws;
+        wsRef.current[conversationId] = ws;
         return ws;
     };
-    const ensureWebSocketConnected = async () => {
-        const existing = wsRef.current;
+    const ensureWebSocketConnected = async (conversationId) => {
+        const existing = wsRef.current[conversationId];
         if (existing && existing.readyState === WebSocket.OPEN) {
             return existing;
         }
-        const ws = connectWebSocket();
+        const ws = connectWebSocket(conversationId);
         if (ws.readyState === WebSocket.OPEN) {
             return ws;
         }
@@ -92,7 +122,7 @@ function App() {
     };
     useEffect(() => {
         return () => {
-            wsRef.current?.close();
+            Object.values(wsRef.current).forEach((socket) => socket.close());
         };
     }, []);
     useEffect(() => {
@@ -100,35 +130,58 @@ function App() {
         if (!chatWindow)
             return;
         chatWindow.scrollTop = chatWindow.scrollHeight;
-    }, [chat]);
-    const sendMessage = async () => {
-        if (!message.trim())
+    }, [activeConversation?.chat]);
+    useEffect(() => {
+        if (!activeConversation)
             return;
-        const outgoingMessage = message;
-        setChat((prev) => [...prev, { sender: 'user', text: outgoingMessage }]);
         setMessage('');
-        if (!hasSubmittedFirstMessage) {
-            await ensureWebSocketConnected();
+    }, [activeConversationId, activeConversation]);
+    useEffect(() => {
+        if (!activeConversationId && conversations.length > 0) {
+            setActiveConversationId(conversations[0].id);
+        }
+    }, [activeConversationId, conversations]);
+    const createNewConversation = () => {
+        const next = createConversation(conversations.length + 1);
+        setConversations((prev) => [...prev, next]);
+        setActiveConversationId(next.id);
+    };
+    const sendMessage = async () => {
+        if (!message.trim() || !activeConversation)
+            return;
+        const outgoingMessage = message.trim();
+        const conversationId = activeConversation.id;
+        setConversations((prev) => prev.map((conversation) => conversation.id === conversationId
+            ? { ...conversation, chat: [...conversation.chat, { sender: 'user', text: outgoingMessage }] }
+            : conversation));
+        setMessage('');
+        if (!activeConversation.hasSubmittedFirstMessage) {
+            await ensureWebSocketConnected(conversationId);
             await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId, message: outgoingMessage }),
+                body: JSON.stringify({ sessionId: conversationId, message: outgoingMessage }),
             });
-            setHasSubmittedFirstMessage(true);
-            connectWebSocket();
+            setConversations((prev) => prev.map((conversation) => conversation.id === conversationId
+                ? { ...conversation, hasSubmittedFirstMessage: true }
+                : conversation));
+            connectWebSocket(conversationId);
             return;
         }
-        const ws = await ensureWebSocketConnected();
+        const ws = await ensureWebSocketConnected(conversationId);
         if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'chat', sessionId, message: outgoingMessage }));
+            ws.send(JSON.stringify({ type: 'chat', sessionId: conversationId, message: outgoingMessage }));
             return;
         }
         await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId, message: outgoingMessage }),
+            body: JSON.stringify({ sessionId: conversationId, message: outgoingMessage }),
         });
     };
-    return (_jsxs("div", { className: "app-shell", children: [_jsxs("header", { children: [_jsx("h1", { children: "AI Chat Stream" }), _jsxs("p", { children: ["Status: ", connected ? 'Connected' : 'Disconnected'] })] }), _jsx("section", { ref: chatWindowRef, className: "chat-window", children: chat.map((line, idx) => (_jsxs("div", { className: `chat-line ${line.sender}`, children: [_jsx("span", { children: line.sender === 'user' ? 'You' : 'Agent' }), line.sender === 'agent' && line.cacheHit && _jsx("span", { children: " (cache)" }), _jsx("p", { children: line.text })] }, idx))) }), _jsxs("footer", { children: [_jsx("input", { value: message, onChange: (event) => setMessage(event.target.value), onKeyDown: (event) => event.key === 'Enter' && sendMessage(), placeholder: "Type a message..." }), _jsx("button", { onClick: sendMessage, children: "Send" })] })] }));
+    if (!activeConversation) {
+        return null;
+    }
+    return (_jsxs("div", { className: "app-shell", children: [_jsxs("aside", { className: "conversation-panel", children: [_jsxs("div", { className: "conversation-panel-header", children: [_jsx("h2", { children: "Conversations" }), _jsx("button", { type: "button", onClick: createNewConversation, children: "New" })] }), _jsx("div", { className: "conversation-list", children: conversations.map((conversation) => (_jsxs("button", { type: "button", className: `conversation-item ${conversation.id === activeConversationId ? 'active' : ''}`, onClick: () => setActiveConversationId(conversation.id), children: [_jsx("strong", { children: conversation.title }), _jsx("span", { children: conversation.id })] }, conversation.id))) })] }), _jsxs("main", { className: "chat-panel", children: [_jsxs("header", { children: [_jsx("h1", { children: "AI Chat Stream" }), _jsxs("p", { children: ["Thread: ", activeConversation.id, " | Status: ", activeConversation.connected ? 'Connected' : 'Disconnected'] })] }), _jsx("section", { ref: chatWindowRef, className: "chat-window", children: activeConversation.chat.map((line, idx) => (_jsxs("div", { className: `chat-line ${line.sender}`, children: [_jsx("span", { children: line.sender === 'user' ? 'You' : 'Agent' }), line.sender === 'agent' && line.cacheHit && _jsx("span", { children: " (cache)" }), _jsx("p", { children: line.text })] }, idx))) }), _jsxs("footer", { children: [_jsx("input", { value: message, onChange: (event) => setMessage(event.target.value), onKeyDown: (event) => event.key === 'Enter' && sendMessage(), placeholder: "Type a message..." }), _jsx("button", { onClick: sendMessage, children: "Send" })] })] })] }));
 }
 export default App;
