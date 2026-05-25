@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -13,15 +14,22 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel
 
 from agents import graph
+from redis_memory import RedisConversationMemory
 
 app = FastAPI()
 
 LANGGRAPH_MODE = os.getenv('LANGGRAPH_MODE', 'local')
 NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
+REDIS_MEMORY_TTL_SECONDS = int(os.getenv('REDIS_MEMORY_TTL_SECONDS', '3600'))
+REDIS_MEMORY_MAX_TURNS = int(os.getenv('REDIS_MEMORY_MAX_TURNS', '50'))
+REDIS_SEMANTIC_THRESHOLD = float(os.getenv('REDIS_SEMANTIC_THRESHOLD', '0.72'))
 
 nc = NATS()
 js = None
 tracer = trace.get_tracer(__name__)
+redis_memory = None
+memory_cache_task = None
 
 
 class OrchestrationRequest(BaseModel):
@@ -74,12 +82,58 @@ async def publish_stream(subject: str, payload: dict):
     await js.publish(subject, json.dumps(payload).encode(), headers=headers)
 
 
+async def cache_response_messages():
+    if redis_memory is None:
+        return
+
+    sub = await nc.subscribe('chat.response')
+    try:
+        while True:
+            try:
+                msg = await sub.next_msg(timeout=5)
+            except asyncio.TimeoutError:
+                continue
+
+            try:
+                payload = json.loads(msg.data.decode())
+            except json.JSONDecodeError:
+                continue
+
+            session_id = str(payload.get('sessionId', '')).strip()
+            reply = str(payload.get('reply', '')).strip()
+            original_message = str(payload.get('originalMessage', '')).strip()
+            source = str(payload.get('responseSource', 'unknown'))
+            if session_id and reply and original_message:
+                await redis_memory.add_turn(
+                    session_id=session_id,
+                    user_message=original_message,
+                    assistant_reply=reply,
+                    source=source,
+                )
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await sub.unsubscribe()
+
+
 @app.on_event('startup')
 async def startup_event():
-    global js
+    global js, redis_memory, memory_cache_task
     setup_telemetry()
     await nc.connect(servers=[NATS_URL])
     js = nc.jetstream()
+
+    redis_memory = RedisConversationMemory(
+        redis_url=REDIS_URL,
+        ttl_seconds=REDIS_MEMORY_TTL_SECONDS,
+        max_turns=REDIS_MEMORY_MAX_TURNS,
+        similarity_threshold=REDIS_SEMANTIC_THRESHOLD,
+    )
+    try:
+        await redis_memory.connect()
+        memory_cache_task = asyncio.create_task(cache_response_messages())
+    except Exception:
+        redis_memory = None
 
     subjects = set()
     for node in graph.nodes.values():
@@ -96,6 +150,10 @@ async def startup_event():
 
 @app.on_event('shutdown')
 async def shutdown_event():
+    if memory_cache_task is not None:
+        memory_cache_task.cancel()
+    if redis_memory is not None:
+        await redis_memory.close()
     await nc.close()
 
 
@@ -123,6 +181,37 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             raise HTTPException(status_code=400, detail='message is required')
 
         span.set_attribute('chat.message_length', len(message))
+
+        if redis_memory is not None:
+            cached_match = await redis_memory.search_similar(request.sessionId, message)
+            if cached_match is not None:
+                span.set_attribute('orchestration.status', 'cache-hit')
+                span.set_attribute('semantic_cache.hit', True)
+                span.set_attribute('semantic_cache.score', cached_match.get('score', 0.0))
+                span.add_event('semantic_cache_hit')
+
+                response_payload = {
+                    'sessionId': request.sessionId,
+                    'reply': cached_match.get('reply'),
+                    'originalMessage': message,
+                    'timestamp': datetime.utcnow().isoformat() + 'Z',
+                    'responseSource': 'redis-semantic-cache',
+                    'cacheHit': True,
+                    'similarityScore': cached_match.get('score'),
+                    'matchedQuestion': cached_match.get('matchedQuestion'),
+                }
+                await publish_stream('chat.response', response_payload)
+                span.set_attribute('nats.publish.subject', 'chat.response')
+                return {
+                    'status': 'served-from-cache',
+                    'sessionId': request.sessionId,
+                    'reply': cached_match.get('reply'),
+                    'similarityScore': cached_match.get('score'),
+                    'cacheHit': True,
+                }
+
+            span.set_attribute('semantic_cache.hit', False)
+
         matched_nodes = [node.id for node in graph.nodes.values() if node.matches(message)]
         span.set_attribute('orchestration.candidate_count', len(matched_nodes))
         span.set_attribute('orchestration.candidates', ','.join(matched_nodes) if matched_nodes else 'none')
@@ -152,6 +241,7 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
                 'target': selected_node.id,
                 'sessionId': request.sessionId,
                 'message': f'Question forwarded to {selected_node.name} for handling.',
+                'cacheHit': False,
             }
 
         span.set_attribute('orchestration.status', 'declined')
@@ -167,6 +257,7 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             'feedbackSubmitted': True,
             'declineReason': 'no_node_match',
             'responseSource': 'langgraph-direct',
+            'cacheHit': False,
         }
         await publish_stream('chat.response', response_payload)
         span.set_attribute('nats.publish.subject', 'chat.response')
@@ -178,4 +269,5 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             'sessionId': request.sessionId,
             'reply': decline_text,
             'feedbackSubmitted': True,
+            'cacheHit': False,
         }

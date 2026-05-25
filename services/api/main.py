@@ -97,6 +97,7 @@ async def send_chat(body: ChatRequest):
         'messageId': str(uuid.uuid4()),
         'sessionId': session_id,
         'orchestration': result.get('orchestration'),
+        'cacheHit': result.get('cacheHit', False),
     }
 
 
@@ -144,9 +145,13 @@ async def queue_chat_message(session_id: str, message: str):
                 span.set_attribute('nats.publish.subject', 'chat.incoming')
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
-                return {'status': 'queued', 'orchestration': None}
+                return {'status': 'queued', 'orchestration': None, 'cacheHit': False}
 
-        return {'status': 'queued', 'orchestration': orchestration.get('status')}
+            return {
+                'status': 'queued',
+                'orchestration': orchestration.get('status'),
+                'cacheHit': bool(orchestration.get('cacheHit', False)),
+            }
 
 
 @app.websocket('/api/chat/ws/{session_id}')
@@ -231,6 +236,7 @@ async def chat_ws(websocket: WebSocket, session_id: str):
                         'type': 'ack',
                         'status': enqueue_result.get('status', 'queued'),
                         'orchestration': enqueue_result.get('orchestration'),
+                        'cacheHit': enqueue_result.get('cacheHit', False),
                         'sessionId': session_id,
                     }
                 )

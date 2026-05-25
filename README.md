@@ -24,12 +24,15 @@ This repository contains a modular full-stack application with:
 - `shift-worker`: JetStream consumer that processes shift-related chat questions and returns randomized responses
 - `kpi-worker`: JetStream consumer that processes KPI-related chat questions and queries the Cosmos emulator for product KPI data
 - `langgraph`: Python orchestration service for local LangGraph-style workflow
+- `redis`: short-term conversation memory and semantic cache backend for `langgraph`
 - `cosmos-emulator`: Cosmos DB emulator container with synthetic shift and KPI datasets
 - `nats`: NATS JetStream broker
 
 ## Notes
 
 - The API sends incoming questions to the LangGraph orchestrator first.
+- The LangGraph orchestrator stores short-term conversation turns in Redis by session.
+- Before routing, LangGraph performs semantic cache lookup in Redis and can return a cached response when similarity is high enough.
 - The LangGraph orchestrator uses a lightweight local node graph to determine the correct AI agent node.
 - Separate `shift-agent` and `kpi-agent` definitions are treated as graph nodes with their own subject routes.
 - If the question is KPI-related, `kpi-worker` consumes the message from NATS and publishes to `chat.response`.

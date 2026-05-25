@@ -18,6 +18,11 @@ services:
     volumes:
       - ./nats/data:/data
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   cosmos-emulator:
     build: ./services/cosmos-emulator
     ports:
@@ -85,9 +90,14 @@ services:
     depends_on:
       - phoenix
       - nats
+      - redis
     environment:
       - LANGGRAPH_MODE=local
       - NATS_URL=nats://nats:4222
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_MEMORY_TTL_SECONDS=3600
+      - REDIS_MEMORY_MAX_TURNS=50
+      - REDIS_SEMANTIC_THRESHOLD=0.72
       - OTEL_SERVICE_NAME=langgraph-orchestrator
       - OTEL_ENVIRONMENT=local
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://phoenix:6006/v1/traces}

@@ -14,6 +14,7 @@ flowchart LR
   UI -->|WS /api/chat/ws/{sessionId}| API
 
   API -->|POST /orchestrate| LG[LangGraph Service\nFastAPI\n:5000]
+  LG <--> REDIS[(Redis\n:6379)]
 
   LG -->|publish chat.incoming| NATS[(NATS JetStream\n:4222 / :8222)]
   LG -->|publish chat.kpi| NATS
@@ -52,11 +53,18 @@ flowchart LR
 
 ### LangGraph Service
 - Applies keyword-based node matching against local graph nodes.
+- Uses Redis-backed short-term conversation memory per session.
+- Executes semantic cache lookup before normal worker routing.
 - Routes to:
   - chat.kpi for KPI/metrics-related prompts
   - chat.incoming for shift/scheduling prompts
   - chat.response with a decline message when no node matches
 - Publishes NATS messages with trace context headers.
+
+### Redis
+- Stores recent conversation turns with TTL by session.
+- Supports semantic cache lookup against recent user messages.
+- Returns cached responses when similarity crosses configured threshold.
 
 ### Shift Worker
 - Durable-consumes chat.incoming (worker_pool).

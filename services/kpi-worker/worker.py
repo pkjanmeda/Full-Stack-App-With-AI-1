@@ -209,6 +209,7 @@ async def main():
                     'timestamp': datetime.utcnow().isoformat() + 'Z',
                     'kpiHits': len(items),
                     'responseSource': 'kpi-worker',
+                    'cacheHit': False,
                 }
 
                 span.set_attribute('kpi.query.product', product or 'all')

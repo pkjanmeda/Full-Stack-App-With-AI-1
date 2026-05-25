@@ -105,6 +105,7 @@ async def main():
                     'originalMessage': message,
                     'timestamp': datetime.utcnow().isoformat() + 'Z',
                     'responseSource': 'shift-worker',
+                    'cacheHit': False,
                 }
 
                 outgoing_headers = {}

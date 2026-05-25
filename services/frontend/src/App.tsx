@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 type ChatLine = {
   sender: 'user' | 'agent';
   text: string;
+  cacheHit?: boolean;
 };
 
 type StreamMessage = {
@@ -13,6 +14,7 @@ type StreamMessage = {
   message?: string;
   reply?: string;
   isPartial?: boolean;
+  cacheHit?: boolean;
 };
 
 function App() {
@@ -30,16 +32,30 @@ function App() {
         if (data.isPartial) {
           const last = prev[prev.length - 1];
           if (last?.sender === 'agent') {
-            return [...prev.slice(0, -1), { ...last, text: data.reply! }];
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                text: data.reply!,
+                cacheHit: typeof data.cacheHit === 'boolean' ? data.cacheHit : last.cacheHit,
+              },
+            ];
           }
-          return [...prev, { sender: 'agent', text: data.reply! }];
+          return [...prev, { sender: 'agent', text: data.reply!, cacheHit: data.cacheHit }];
         }
 
         const last = prev[prev.length - 1];
         if (last?.sender === 'agent') {
-          return [...prev.slice(0, -1), { ...last, text: data.reply }];
+          return [
+            ...prev.slice(0, -1),
+            {
+              ...last,
+              text: data.reply,
+              cacheHit: typeof data.cacheHit === 'boolean' ? data.cacheHit : last.cacheHit,
+            },
+          ];
         }
-        return [...prev, { sender: 'agent', text: data.reply }];
+        return [...prev, { sender: 'agent', text: data.reply, cacheHit: data.cacheHit }];
       });
   };
 
@@ -149,6 +165,7 @@ function App() {
         {chat.map((line, idx) => (
           <div key={idx} className={`chat-line ${line.sender}`}>
             <span>{line.sender === 'user' ? 'You' : 'Agent'}</span>
+            {line.sender === 'agent' && line.cacheHit && <span> (cache)</span>}
             <p>{line.text}</p>
           </div>
         ))}
