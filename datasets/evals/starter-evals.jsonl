@@ -1,0 +1,20 @@
+{"input":"Can you help me swap my shift tomorrow?","expected_route":"shift-agent","expected_source":"shift-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"shift"}
+{"input":"What is my shift schedule for Friday?","expected_route":"shift-agent","expected_source":"shift-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"shift"}
+{"input":"I need time off next week, what should I do?","expected_route":"shift-agent","expected_source":"shift-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"time"}
+{"input":"Show latest KPI for Widget X","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"Widget X"}
+{"input":"Give me KPI trend for Widget Y","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"Widget Y"}
+{"input":"What is current production efficiency?","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"efficiency"}
+{"input":"What are performance metrics for line C?","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"KPI"}
+{"input":"Tell me a joke about coffee","expected_route":"decline","expected_source":"langgraph-direct","expected_decline":true,"cache_eligible":true,"expected_contains":"cannot answer"}
+{"input":"Who won the football match last night?","expected_route":"decline","expected_source":"langgraph-direct","expected_decline":true,"cache_eligible":true,"expected_contains":"cannot answer"}
+{"input":"Write me a poem about stars","expected_route":"decline","expected_source":"langgraph-direct","expected_decline":true,"cache_eligible":true,"expected_contains":"cannot answer"}
+{"input":"Can I get cafeteria menu for tomorrow?","expected_route":"decline_or_cache","expected_source":"langgraph-direct_or_redis-semantic-cache","expected_decline":true,"cache_eligible":true,"expected_contains":"cannot answer"}
+{"input":"Can I get cafeteria menu for tomorrow?","expected_route":"decline_or_cache","expected_source":"redis-semantic-cache","expected_decline":true,"cache_eligible":true,"expected_contains":"cannot answer"}
+{"input":"What is the KPI for Widget Z today?","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"Widget Z"}
+{"input":"Need shift change for weekend","expected_route":"shift-agent","expected_source":"shift-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"shift"}
+{"input":"How are dashboard metrics doing this morning?","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"metric"}
+{"input":"Can you plan my vacation itinerary?","expected_route":"decline","expected_source":"langgraph-direct","expected_decline":true,"cache_eligible":true,"expected_contains":"cannot answer"}
+{"input":"Need help with shift roster updates","expected_route":"shift-agent","expected_source":"shift-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"shift"}
+{"input":"Show me product KPI summary","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"KPI"}
+{"input":"What is throughput metric right now?","expected_route":"kpi-agent","expected_source":"kpi-worker","expected_decline":false,"cache_eligible":true,"expected_contains":"throughput"}
+{"input":"Tell me latest weather in Seattle","expected_route":"decline","expected_source":"langgraph-direct","expected_decline":true,"cache_eligible":true,"expected_contains":"cannot answer"}

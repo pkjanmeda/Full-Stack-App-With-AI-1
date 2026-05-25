@@ -179,7 +179,7 @@ async def main():
     sub = await js.subscribe('chat.kpi', durable='kpi_worker_pool')
     print(f'KPI worker connected to NATS at {NATS_URL}')
     print(f'KPI worker connecting to Cosmos at {COSMOS_ENDPOINT}')
-    store.ensure_resources_with_retry()
+    store.ensure_resources_with_retry(retries=30, delay_seconds=1.0)
 
     while True:
         try:

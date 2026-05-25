@@ -36,6 +36,10 @@ class WsChatRequest(BaseModel):
     message: str
 
 
+def normalize_text(value: str) -> str:
+    return ' '.join(value.lower().split())
+
+
 def parse_otlp_headers(raw_headers: str) -> dict[str, str]:
     headers = {}
     for pair in raw_headers.split(','):
@@ -198,6 +202,20 @@ async def chat_ws(websocket: WebSocket, session_id: str):
                         span.set_attribute('cache.score', float(data.get('similarityScore')))
                     reply = data.get('reply')
                     if isinstance(reply, str) and reply.strip():
+                        original_message = str(data.get('originalMessage', '')).strip()
+                        with tracer.start_as_current_span('api.final_answer', context=parent_context, kind=SpanKind.INTERNAL) as final_span:
+                            final_span.set_attribute('openinference.span.kind', 'CHAIN')
+                            final_span.set_attribute('chat.session_id', session_id)
+                            final_span.set_attribute('eval.input.raw', original_message)
+                            final_span.set_attribute('eval.input.normalized_text', normalize_text(original_message))
+                            final_span.set_attribute('eval.output.raw', reply)
+                            final_span.set_attribute('eval.output.normalized_text', normalize_text(reply))
+                            final_span.set_attribute('eval.response.source', str(data.get('responseSource', 'unknown')))
+                            final_span.set_attribute('cache.hit', cache_hit)
+                            final_span.set_attribute('cache.source', str(data.get('responseSource', 'none')) if cache_hit else 'none')
+                            if data.get('similarityScore') is not None:
+                                final_span.set_attribute('cache.score', float(data.get('similarityScore')))
+
                         words = reply.split()
                         span.set_attribute('stream.word_count', len(words))
                         span.set_attribute('stream.chunk_delay_ms', 100)

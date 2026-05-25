@@ -65,3 +65,29 @@ Override OTLP endpoint and headers in your shell or `.env`:
    ```
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an empty value to disable telemetry export.
+
+## Local Phoenix Regression Check (One Command)
+
+Use the starter eval dataset and run replay plus pass/fail scoring locally.
+
+1. Install script dependency once:
+   ```bash
+   pip install -r scripts/requirements.txt
+   ```
+2. Make sure the stack is running:
+   ```bash
+   docker compose up -d
+   ```
+3. Run the one-command regression check:
+   ```bash
+   python scripts/run_local_phoenix_regression.py
+   ```
+
+Outputs:
+- `datasets/evals/observed-results.jsonl` (replayed observed outputs)
+- `datasets/evals/scored-results.jsonl` (row-level checks and pass/fail)
+- `datasets/evals/score-summary.json` (overall summary and failed examples)
+
+Useful overrides:
+- `python scripts/run_local_phoenix_regression.py --ws-base ws://localhost:4000/api/chat/ws` (Note: API runs on port 4000, not 8000)
+- `python scripts/run_local_phoenix_regression.py --dataset datasets/evals/starter-evals.jsonl`

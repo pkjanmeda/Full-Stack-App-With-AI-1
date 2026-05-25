@@ -24,7 +24,10 @@ class CosmosKpiStore:
         self.seed_documents = seed_documents
 
     def _create_client(self):
-        return CosmosClient(self.endpoint, credential=self.key, connection_verify=False)
+        try:
+            return CosmosClient(self.endpoint, credential=self.key, connection_verify=False)
+        except (AttributeError, Exception) as e:
+            raise ServiceRequestError(f"Failed to create Cosmos client: {e}") from e
 
     def _get_container(self):
         client = self._create_client()

@@ -1,0 +1,30 @@
+{
+  "total": 20,
+  "passed": 18,
+  "failed": 2,
+  "pass_rate": 90.0,
+  "all_passed": false,
+  "failed_examples": [
+    {
+      "input": "What is current production efficiency?",
+      "observed_source": "langgraph-direct",
+      "expected_source": "kpi-worker",
+      "checks": {
+        "source_match": false,
+        "contains_match": false,
+        "decline_match": false
+      }
+    },
+    {
+      "input": "Can I get cafeteria menu for tomorrow?",
+      "observed_source": "langgraph-direct",
+      "expected_source": "redis-semantic-cache",
+      "checks": {
+        "source_match": false,
+        "contains_match": true,
+        "decline_match": true,
+        "cache_hit_match": false
+      }
+    }
+  ]
+}
