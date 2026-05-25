@@ -283,12 +283,16 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             raise HTTPException(status_code=400, detail='message is required')
 
         span.set_attribute('chat.message_length', len(message))
+        span.set_attribute('input.value', message)
+        span.set_attribute('input.mime_type', 'text/plain')
 
         extracted_name = extract_user_name(message)
         if extracted_name:
             await save_user_name(request.sessionId, extracted_name)
             span.set_attribute('orchestration.status', 'basic-ai-name-saved')
             span.set_attribute('basic_ai.intent', 'save_name')
+            span.set_attribute('output.value', f'Nice to meet you, {extracted_name}. I will remember your name for this thread.')
+            span.set_attribute('output.mime_type', 'text/plain')
             span.add_event('basic_ai_name_saved')
             span.set_attribute('nats.publish.subject', 'chat.response')
             return await publish_direct_response(
@@ -305,12 +309,16 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             span.add_event('basic_ai_name_queried')
             span.set_attribute('nats.publish.subject', 'chat.response')
             if stored_name:
+                span.set_attribute('output.value', f'Your name is {stored_name}.')
+                span.set_attribute('output.mime_type', 'text/plain')
                 return await publish_direct_response(
                     session_id=request.sessionId,
                     message=message,
                     reply=f'Your name is {stored_name}.',
                     source='langgraph-basic-ai',
                 )
+            span.set_attribute('output.value', 'I do not know your name yet. Tell me by saying: my name is <your name>.')
+            span.set_attribute('output.mime_type', 'text/plain')
             return await publish_direct_response(
                 session_id=request.sessionId,
                 message=message,
@@ -327,6 +335,8 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             reply = 'Hello! How can I help you today?'
             if stored_name:
                 reply = f'Hello {stored_name}! How can I help you today?'
+            span.set_attribute('output.value', reply)
+            span.set_attribute('output.mime_type', 'text/plain')
             return await publish_direct_response(
                 session_id=request.sessionId,
                 message=message,
@@ -343,6 +353,8 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
                 span.set_attribute('cache.hit', True)
                 span.set_attribute('cache.source', 'redis-semantic-cache')
                 span.set_attribute('cache.score', cached_match.get('score', 0.0))
+                span.set_attribute('output.value', str(cached_match.get('reply', '')))
+                span.set_attribute('output.mime_type', 'text/plain')
                 span.add_event('semantic_cache_hit')
 
                 response_payload = {
@@ -377,6 +389,8 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             span.set_attribute('orchestration.target', selected_node.id)
             matched_keywords = [k for k in selected_node.match_keywords if k in message.lower()]
             span.set_attribute('orchestration.matched_keywords', ','.join(matched_keywords) if matched_keywords else 'none')
+            span.set_attribute('output.value', f'forwarded:{selected_node.id}')
+            span.set_attribute('output.mime_type', 'text/plain')
             span.add_event('orchestration_route_selected')
 
             payload = {
@@ -404,6 +418,8 @@ async def orchestrate(request: OrchestrationRequest, raw_request: Request):
             'Sorry, I cannot answer that question right now. '
             'Your feedback has been submitted to the product owner so that this functionality can be added.'
         )
+        span.set_attribute('output.value', decline_text)
+        span.set_attribute('output.mime_type', 'text/plain')
         response_payload = {
             'sessionId': request.sessionId,
             'reply': decline_text,

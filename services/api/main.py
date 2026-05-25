@@ -111,6 +111,8 @@ async def queue_chat_message(session_id: str, message: str):
         span.set_attribute('chat.session_id', session_id)
         span.set_attribute('chat.message_length', len(message))
         span.set_attribute('chat.question_type', 'chat-question')
+        span.set_attribute('input.value', message)
+        span.set_attribute('input.mime_type', 'text/plain')
         span.set_attribute('cache.hit', False)
         span.set_attribute('cache.source', 'none')
         span.add_event('chat_request_received')
@@ -140,6 +142,8 @@ async def queue_chat_message(session_id: str, message: str):
                 orchestration = response.json()
                 span.set_attribute('chat.orchestration', orchestration.get('status', 'unknown'))
                 span.set_attribute('chat.orchestration.target', orchestration.get('target', 'none'))
+                span.set_attribute('output.value', json.dumps(orchestration))
+                span.set_attribute('output.mime_type', 'application/json')
                 cache_hit = bool(orchestration.get('cacheHit', False))
                 span.set_attribute('cache.hit', cache_hit)
                 if cache_hit:
@@ -149,6 +153,8 @@ async def queue_chat_message(session_id: str, message: str):
                 span.add_event('langgraph_orchestration_complete')
             except Exception as exc:
                 span.set_attribute('chat.orchestration', 'fallback-queued')
+                span.set_attribute('output.value', 'fallback-queued')
+                span.set_attribute('output.mime_type', 'text/plain')
                 span.add_event('langgraph_orchestration_failed')
                 if js is None:
                     raise HTTPException(status_code=503, detail='message bus is not initialized')
@@ -206,6 +212,10 @@ async def chat_ws(websocket: WebSocket, session_id: str):
                         with tracer.start_as_current_span('api.final_answer', context=parent_context, kind=SpanKind.INTERNAL) as final_span:
                             final_span.set_attribute('openinference.span.kind', 'CHAIN')
                             final_span.set_attribute('chat.session_id', session_id)
+                            final_span.set_attribute('input.value', original_message)
+                            final_span.set_attribute('input.mime_type', 'text/plain')
+                            final_span.set_attribute('output.value', reply)
+                            final_span.set_attribute('output.mime_type', 'text/plain')
                             final_span.set_attribute('eval.input.raw', original_message)
                             final_span.set_attribute('eval.input.normalized_text', normalize_text(original_message))
                             final_span.set_attribute('eval.output.raw', reply)

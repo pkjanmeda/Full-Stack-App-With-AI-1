@@ -201,6 +201,8 @@ async def main():
 
                 span.set_attribute('chat.session_id', session_id)
                 span.set_attribute('chat.message_length', len(message))
+                span.set_attribute('input.value', str(message))
+                span.set_attribute('input.mime_type', 'text/plain')
                 span.set_attribute('orchestration.target', 'kpi-worker')
                 span.add_event('worker_message_received')
 
@@ -219,6 +221,8 @@ async def main():
                 span.set_attribute('kpi.query.product', product or 'all')
                 span.set_attribute('kpi.query.hit_count', len(items))
                 span.set_attribute('chat.reply_length', len(response_text))
+                span.set_attribute('output.value', response_text)
+                span.set_attribute('output.mime_type', 'text/plain')
 
                 outgoing_headers = {}
                 inject(outgoing_headers)
