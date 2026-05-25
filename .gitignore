@@ -17,3 +17,6 @@ nats/data/jetstream/jetstream/$G/streams/chat_response/msgs/index.db
 nats/data/jetstream/jetstream/$G/streams/chat_response/msgs/1.blk
 nats/data/jetstream/jetstream/$G/streams/chat_response/msgs/index.db
 nats/data/jetstream/jetstream/$G/streams/chat_response/msgs/index.db
+nats/data/jetstream/jetstream/$G/streams/chat_response/msgs/index.db
+nats/data/jetstream/jetstream/$G/streams/chat_response/msgs/index.db
+nats/data/jetstream/jetstream/$G/streams/chat_incoming/msgs/1.blk
