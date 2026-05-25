@@ -4,14 +4,14 @@
 This system is a local-first, containerized chat platform designed to demonstrate:
 - Orchestrated routing with LangGraph-style node selection
 - Event-driven worker processing through NATS JetStream
-- Session-scoped streamed chat responses over SSE
+- Session-scoped streamed chat responses over WebSocket
 - End-to-end distributed tracing with OpenTelemetry and Arize Phoenix
 
 ## Service Topology
 ```mermaid
 flowchart LR
   UI[Frontend\nReact + Vite\n:3000] -->|POST /api/chat| API[API Service\nFastAPI\n:4000]
-  UI -->|GET /api/chat/stream (SSE)| API
+  UI -->|WS /api/chat/ws/{sessionId}| API
 
   API -->|POST /orchestrate| LG[LangGraph Service\nFastAPI\n:5000]
 
@@ -38,15 +38,17 @@ flowchart LR
 ### Frontend
 - Maintains a generated sessionId per browser session.
 - Sends user messages to POST /api/chat.
-- Opens SSE stream to GET /api/chat/stream?sessionId=...
+- Opens WebSocket to /api/chat/ws/{sessionId} after first POST.
 - Renders partial agent updates in place using isPartial=true events.
 
 ### API Service
 - Validates inbound chat payload.
 - Starts a tracing span and forwards request to LangGraph /orchestrate.
 - If LangGraph request fails, falls back by publishing directly to chat.incoming.
-- Subscribes to chat.response and emits word-level streaming chunks to the client.
-- Filters outgoing SSE events by sessionId.
+- Keeps POST /api/chat as initial entry point.
+- Maintains WebSocket session endpoint for streaming and follow-up question submission.
+- Subscribes to chat.response and emits word-level streaming chunks over WebSocket.
+- Filters outgoing stream events by sessionId.
 
 ### LangGraph Service
 - Applies keyword-based node matching against local graph nodes.
@@ -94,6 +96,7 @@ sequenceDiagram
 
   U->>F: Enter message
   F->>A: POST /api/chat
+  F->>A: WS connect /api/chat/ws/{sessionId}
   A->>L: POST /orchestrate
 
   alt Shift route
@@ -108,10 +111,10 @@ sequenceDiagram
     L->>N: publish chat.response (decline)
   end
 
-  F->>A: GET /api/chat/stream?sessionId=...
+  F->>A: Optional follow-up via WS message
   A->>N: subscribe chat.response
   N->>A: response event
-  A->>F: SSE partial chunks + final
+  A->>F: WS partial chunks + final
 ```
 
 ## Observability Model

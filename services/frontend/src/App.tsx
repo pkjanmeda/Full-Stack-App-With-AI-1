@@ -6,6 +6,11 @@ type ChatLine = {
 };
 
 type StreamMessage = {
+  type?: string;
+  status?: string;
+  orchestration?: string | null;
+  sessionId?: string;
+  message?: string;
   reply?: string;
   isPartial?: boolean;
 };
@@ -15,14 +20,10 @@ function App() {
   const [message, setMessage] = useState('');
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [connected, setConnected] = useState(false);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const [hasSubmittedFirstMessage, setHasSubmittedFirstMessage] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  useEffect(() => {
-    const source = new EventSource(`/api/chat/stream?sessionId=${sessionId}`);
-    source.onopen = () => setConnected(true);
-    source.onerror = () => setConnected(false);
-    source.onmessage = (event) => {
-      const data = JSON.parse(event.data) as StreamMessage;
+  const applyAgentChunk = (data: StreamMessage) => {
       if (typeof data.reply !== 'string') return;
 
       setChat((prev) => {
@@ -40,25 +41,64 @@ function App() {
         }
         return [...prev, { sender: 'agent', text: data.reply }];
       });
-    };
-    eventSourceRef.current = source;
+  };
 
-    return () => {
-      source.close();
+  const connectWebSocket = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      return wsRef.current;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${protocol}://${window.location.host}/api/chat/ws/${sessionId}`);
+    ws.onopen = () => setConnected(true);
+    ws.onerror = () => setConnected(false);
+    ws.onclose = () => setConnected(false);
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data) as StreamMessage;
+      if (data.type === 'ack' || data.type === 'error') {
+        return;
+      }
+      applyAgentChunk(data);
     };
-  }, [sessionId]);
+    wsRef.current = ws;
+    return ws;
+  };
+
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+    };
+  }, []);
 
   const sendMessage = async () => {
     if (!message.trim()) return;
-    setChat((prev) => [...prev, { sender: 'user', text: message }]);
+    const outgoingMessage = message;
+    setChat((prev) => [...prev, { sender: 'user', text: outgoingMessage }]);
+    setMessage('');
+
+    if (!hasSubmittedFirstMessage) {
+      await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, message: outgoingMessage }),
+      });
+
+      setHasSubmittedFirstMessage(true);
+      connectWebSocket();
+      return;
+    }
+
+    const ws = connectWebSocket();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'chat', sessionId, message: outgoingMessage }));
+      return;
+    }
 
     await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, message }),
+      body: JSON.stringify({ sessionId, message: outgoingMessage }),
     });
-
-    setMessage('');
   };
 
   return (

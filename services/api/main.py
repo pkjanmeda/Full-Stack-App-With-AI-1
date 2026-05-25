@@ -6,8 +6,7 @@ from datetime import datetime
 from time import perf_counter
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from nats.aio.client import Client as NATS
 from opentelemetry import trace
@@ -29,6 +28,11 @@ tracer = trace.get_tracer(__name__)
 
 class ChatRequest(BaseModel):
     sessionId: str | None = None
+    message: str
+
+
+class WsChatRequest(BaseModel):
+    type: str = 'chat'
     message: str
 
 
@@ -82,12 +86,22 @@ async def startup_event():
 
 @app.post('/api/chat')
 async def send_chat(body: ChatRequest):
-    with tracer.start_as_current_span('api.send_chat') as span:
-        message = body.message.strip()
-        if not message:
-            raise HTTPException(status_code=400, detail='message is required')
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail='message is required')
 
-        session_id = body.sessionId or str(uuid.uuid4())
+    session_id = body.sessionId or str(uuid.uuid4())
+    result = await queue_chat_message(session_id=session_id, message=message)
+    return {
+        'status': result.get('status', 'queued'),
+        'messageId': str(uuid.uuid4()),
+        'sessionId': session_id,
+        'orchestration': result.get('orchestration'),
+    }
+
+
+async def queue_chat_message(session_id: str, message: str):
+    with tracer.start_as_current_span('api.send_chat') as span:
         span.set_attribute('chat.session_id', session_id)
         span.set_attribute('chat.message_length', len(message))
         span.set_attribute('chat.question_type', 'chat-question')
@@ -130,60 +144,101 @@ async def send_chat(body: ChatRequest):
                 span.set_attribute('nats.publish.subject', 'chat.incoming')
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
-                return {'status': 'queued', 'messageId': str(uuid.uuid4()), 'sessionId': session_id}
+                return {'status': 'queued', 'orchestration': None}
 
-        return {
-            'status': 'queued',
-            'messageId': str(uuid.uuid4()),
-            'sessionId': session_id,
-            'orchestration': orchestration.get('status'),
-        }
+        return {'status': 'queued', 'orchestration': orchestration.get('status')}
 
 
-@app.get('/api/chat/stream')
-async def stream(sessionId: str = Query(...)):
-    async def event_generator():
-        sub = await nc.subscribe('chat.response')
-        first_chunk_sent = False
-        stream_started_at = perf_counter()
+@app.websocket('/api/chat/ws/{session_id}')
+async def chat_ws(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    sub = await nc.subscribe('chat.response')
+    stream_started_at = perf_counter()
+    first_chunk_sent = False
+    shutdown_event = asyncio.Event()
+
+    async def pump_chat_responses():
+        nonlocal first_chunk_sent
         try:
-            while True:
+            while not shutdown_event.is_set():
                 try:
                     msg = await sub.next_msg(timeout=15)
                 except asyncio.TimeoutError:
-                    yield ': ping\n\n'
                     continue
 
                 carrier = dict(msg.headers or {})
                 parent_context = extract(carrier)
-                with tracer.start_as_current_span('api.stream.emit', context=parent_context) as span:
+                with tracer.start_as_current_span('api.ws.emit', context=parent_context) as span:
                     data = json.loads(msg.data.decode())
-                    if data.get('sessionId') == sessionId:
-                        span.set_attribute('chat.session_id', sessionId)
-                        span.set_attribute('stream.response_source', str(data.get('responseSource', 'unknown')))
-                        reply = data.get('reply')
-                        if isinstance(reply, str) and reply.strip():
-                            words = reply.split()
-                            span.set_attribute('stream.word_count', len(words))
-                            span.set_attribute('stream.chunk_delay_ms', 100)
-                            partial = ''
-                            for index, word in enumerate(words, 1):
-                                partial = f'{partial} {word}'.strip()
-                                chunk = {**data, 'reply': partial, 'isPartial': True}
-                                yield f'event: message\ndata: {json.dumps(chunk)}\n\n'
-                                if not first_chunk_sent:
-                                    first_chunk_latency_ms = int((perf_counter() - stream_started_at) * 1000)
-                                    span.set_attribute('stream.first_chunk_latency_ms', first_chunk_latency_ms)
-                                    first_chunk_sent = True
-                                span.add_event('stream_chunk_emitted', {'stream.chunk_index': index})
-                                await asyncio.sleep(0.1)
-                            final_chunk = {**data, 'reply': reply, 'isPartial': False}
-                            yield f'event: message\ndata: {json.dumps(final_chunk)}\n\n'
-                            span.add_event('stream_completed')
-                            span.set_attribute('stream.total_duration_ms', int((perf_counter() - stream_started_at) * 1000))
-                        else:
-                            yield f'event: message\ndata: {json.dumps(data)}\n\n'
-        finally:
-            await sub.unsubscribe()
+                    if data.get('sessionId') != session_id:
+                        continue
 
-    return StreamingResponse(event_generator(), media_type='text/event-stream')
+                    span.set_attribute('chat.session_id', session_id)
+                    span.set_attribute('stream.transport', 'websocket')
+                    span.set_attribute('stream.response_source', str(data.get('responseSource', 'unknown')))
+                    reply = data.get('reply')
+                    if isinstance(reply, str) and reply.strip():
+                        words = reply.split()
+                        span.set_attribute('stream.word_count', len(words))
+                        span.set_attribute('stream.chunk_delay_ms', 100)
+                        partial = ''
+                        for index, word in enumerate(words, 1):
+                            partial = f'{partial} {word}'.strip()
+                            chunk = {**data, 'reply': partial, 'isPartial': True}
+                            await websocket.send_json(chunk)
+                            if not first_chunk_sent:
+                                first_chunk_latency_ms = int((perf_counter() - stream_started_at) * 1000)
+                                span.set_attribute('stream.first_chunk_latency_ms', first_chunk_latency_ms)
+                                first_chunk_sent = True
+                            span.add_event('stream_chunk_emitted', {'stream.chunk_index': index})
+                            await asyncio.sleep(0.1)
+                        final_chunk = {**data, 'reply': reply, 'isPartial': False}
+                        await websocket.send_json(final_chunk)
+                        span.add_event('stream_completed')
+                        span.set_attribute('stream.total_duration_ms', int((perf_counter() - stream_started_at) * 1000))
+                    else:
+                        await websocket.send_json(data)
+        except WebSocketDisconnect:
+            shutdown_event.set()
+
+    pump_task = asyncio.create_task(pump_chat_responses())
+
+    try:
+        while True:
+            raw_message = await websocket.receive_text()
+            with tracer.start_as_current_span('api.ws.receive') as span:
+                span.set_attribute('chat.session_id', session_id)
+                span.set_attribute('stream.transport', 'websocket')
+
+                try:
+                    payload = WsChatRequest.model_validate_json(raw_message)
+                except Exception:
+                    await websocket.send_json({'type': 'error', 'message': 'invalid websocket payload'})
+                    continue
+
+                if payload.type != 'chat':
+                    await websocket.send_json({'type': 'error', 'message': 'unsupported websocket message type'})
+                    continue
+
+                message = payload.message.strip()
+                if not message:
+                    await websocket.send_json({'type': 'error', 'message': 'message is required'})
+                    continue
+
+                enqueue_result = await queue_chat_message(session_id=session_id, message=message)
+                await websocket.send_json(
+                    {
+                        'type': 'ack',
+                        'status': enqueue_result.get('status', 'queued'),
+                        'orchestration': enqueue_result.get('orchestration'),
+                        'sessionId': session_id,
+                    }
+                )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        shutdown_event.set()
+        pump_task.cancel()
+        await sub.unsubscribe()
+
+

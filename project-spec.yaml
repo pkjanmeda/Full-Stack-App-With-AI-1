@@ -7,7 +7,7 @@ project:
   status: active
 
 goals:
-  - Provide a simple web chat UI with live server-sent streaming updates.
+  - Provide a simple web chat UI with live WebSocket streaming updates.
   - Route each chat request through a local LangGraph orchestrator service.
   - Process domain tasks using separate worker services (shift and KPI).
   - Persist and query KPI demo data through a local Cosmos emulator.
@@ -31,17 +31,20 @@ architecture:
       path: services/frontend
       responsibilities:
         - send POST /api/chat with sessionId and message
-        - open EventSource to /api/chat/stream
+        - open WebSocket to /api/chat/ws/{sessionId} after first POST
+        - send optional follow-up questions over the same WebSocket connection
         - render agent responses as incremental partial updates
 
     api:
       type: fastapi gateway
       path: services/api
       responsibilities:
-        - accept chat requests at /api/chat
+        - accept first chat request at /api/chat
         - call langgraph /orchestrate first
         - fallback publish to chat.incoming if langgraph call fails
-        - stream session-filtered chat.response events over SSE
+        - provide WebSocket endpoint /api/chat/ws/{sessionId}
+        - stream session-filtered chat.response events over WebSocket
+        - accept optional follow-up messages over WebSocket
         - emit streamed words at ~100ms intervals for visible tokenized output
 
     langgraph:
@@ -91,10 +94,12 @@ architecture:
 
 message_flow:
   - frontend POSTs message to api /api/chat
+  - frontend opens websocket to /api/chat/ws/{sessionId}
   - api starts trace span and forwards request to langgraph /orchestrate
   - langgraph selects target route (chat.incoming, chat.kpi, or direct decline)
   - selected worker consumes routed message and publishes chat.response
-  - api SSE endpoint subscribes to chat.response and filters by sessionId
+  - api websocket session subscribes to chat.response and filters by sessionId
+  - frontend may send follow-up messages through websocket to api
   - api emits partial word-by-word updates and final message to frontend
 
 api_contract:
@@ -110,18 +115,19 @@ api_contract:
         sessionId: string
         orchestration: forwarded | declined | null
 
-    - path: /api/chat/stream
-      method: GET
-      query:
-        sessionId: string
+    - path: /api/chat/ws/{sessionId}
+      method: WS
+      direction: bidirectional
       response:
-        content_type: text/event-stream
-        event: message
+        content_type: application/json over websocket frames
         payload_fields:
           - sessionId
           - reply
           - isPartial
           - responseSource
+      request_payload:
+        type: chat
+        message: string
 
     - path: /orchestrate
       method: POST
@@ -141,7 +147,7 @@ telemetry:
   transport: otlp http
   context_propagation:
     - http headers between api and langgraph
-    - nats message headers between langgraph/workers/api
+    - nats message headers between langgraph/workers/api websocket stream
   key_annotations:
     - chat.session_id
     - chat.message_length

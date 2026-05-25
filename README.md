@@ -37,7 +37,8 @@ This repository contains a modular full-stack application with:
 - If the question is neither shift-related nor KPI-related, LangGraph publishes a decline response and feedback notice directly to `chat.response`.
 - The `shift-worker` and `kpi-worker` services remain simple and produce randomized test responses.
 - A separate Cosmos emulator project ships with `services/cosmos-emulator/cosmos-init.sql` for synthetic shift and KPI data.
-- The frontend connects to `/api/chat/stream` for server-sent events.
+- The first message is submitted through `POST /api/chat`, then the frontend upgrades to a WebSocket connection at `/api/chat/ws/{sessionId}`.
+- The WebSocket channel is used for response streaming and optional follow-up chat submissions.
 - LangGraph orchestration is local-only and does not require a LangChain API key in this setup.
 
 ## Tracing To Arize
