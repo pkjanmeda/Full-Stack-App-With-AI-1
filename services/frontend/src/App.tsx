@@ -64,6 +64,43 @@ function App() {
     return ws;
   };
 
+  const ensureWebSocketConnected = async (): Promise<WebSocket> => {
+    const existing = wsRef.current;
+    if (existing && existing.readyState === WebSocket.OPEN) {
+      return existing;
+    }
+
+    const ws = connectWebSocket();
+    if (ws.readyState === WebSocket.OPEN) {
+      return ws;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        reject(new Error('websocket connection timeout'));
+      }, 5000);
+
+      const onOpen = () => {
+        window.clearTimeout(timeout);
+        ws.removeEventListener('open', onOpen);
+        ws.removeEventListener('error', onError);
+        resolve();
+      };
+
+      const onError = () => {
+        window.clearTimeout(timeout);
+        ws.removeEventListener('open', onOpen);
+        ws.removeEventListener('error', onError);
+        reject(new Error('websocket connection failed'));
+      };
+
+      ws.addEventListener('open', onOpen);
+      ws.addEventListener('error', onError);
+    });
+
+    return ws;
+  };
+
   useEffect(() => {
     return () => {
       wsRef.current?.close();
@@ -77,6 +114,7 @@ function App() {
     setMessage('');
 
     if (!hasSubmittedFirstMessage) {
+      await ensureWebSocketConnected();
       await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -88,7 +126,7 @@ function App() {
       return;
     }
 
-    const ws = connectWebSocket();
+    const ws = await ensureWebSocketConnected();
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'chat', sessionId, message: outgoingMessage }));
       return;
