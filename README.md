@@ -12,10 +12,53 @@ This repository contains a modular full-stack application with:
 1. Copy `.env.example` to `.env` and adjust values if needed.
 2. Start the full stack:
    ```bash
-   docker compose up --build
+   docker compose --profile cosmos-container up --build
    ```
 3. Open the frontend at `http://localhost:3000`.
 4. Send a chat message and watch LangGraph decide whether to forward it to `shift-worker` or reply with product feedback.
+
+### Cosmos Mode Switch (Local Host Emulator vs Container)
+
+Cosmos connection settings are centralized in `.env`.
+
+- `COSMOS_SOURCE=container`: workers use `COSMOS_ENDPOINT_CONTAINER` (default `https://cosmos-emulator:8081/`)
+- `COSMOS_SOURCE=local`: workers use `COSMOS_ENDPOINT_LOCAL` (default `https://host.docker.internal:8081/`)
+
+Run with containerized emulator:
+
+```bash
+docker compose --profile cosmos-container up --build
+```
+
+Run with locally installed host emulator:
+
+```bash
+docker compose up --build
+```
+
+When using local host emulator, set `COSMOS_SOURCE=local` in `.env`.
+
+### Seed Local Cosmos Emulator (Create Both Containers)
+
+Use one of the scripts below to create and seed both containers (`shift_data` and `kpi_data`) in your locally installed Cosmos emulator.
+
+PowerShell (Windows):
+
+```powershell
+./scripts/seed_local_cosmos_emulator.ps1
+```
+
+Git Bash:
+
+```bash
+./scripts/seed_local_cosmos_emulator.sh
+```
+
+Optional endpoint override:
+
+```powershell
+./scripts/seed_local_cosmos_emulator.ps1 -Endpoint https://localhost:8081/
+```
 
 ## Services
 
@@ -54,7 +97,7 @@ The local Phoenix container is for tracing and UI inspection. It is not a drop-i
 
 1. Start the stack:
    ```bash
-   docker compose up --build
+   docker compose --profile cosmos-container up --build
    ```
 2. Open Phoenix UI at `http://localhost:6006`.
 

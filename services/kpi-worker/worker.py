@@ -17,7 +17,15 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from cosmos_store import CosmosKpiStore
 
 NATS_URL = os.getenv('NATS_URL', 'nats://nats:4222')
-COSMOS_ENDPOINT = os.getenv('COSMOS_ENDPOINT', 'https://cosmos-emulator:8081/')
+COSMOS_SOURCE = os.getenv('COSMOS_SOURCE', 'container').strip().lower()
+COSMOS_ENDPOINT_CONTAINER = os.getenv('COSMOS_ENDPOINT_CONTAINER', 'https://cosmos-emulator:8081/')
+COSMOS_ENDPOINT_LOCAL = os.getenv('COSMOS_ENDPOINT_LOCAL', 'https://host.docker.internal:8081/')
+
+if COSMOS_SOURCE == 'local':
+    COSMOS_ENDPOINT = COSMOS_ENDPOINT_LOCAL
+else:
+    COSMOS_ENDPOINT = COSMOS_ENDPOINT_CONTAINER
+
 COSMOS_KEY = os.getenv(
     'COSMOS_KEY',
     'C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=='

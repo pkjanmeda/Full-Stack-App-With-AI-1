@@ -41,6 +41,8 @@ def parse_init_file(path):
                 db_name = insert_match.group(1)
                 container_name = insert_match.group(2)
                 document_text = insert_match.group(3).strip()
+                if document_text.endswith(';'):
+                    document_text = document_text[:-1].strip()
                 try:
                     document = json.loads(document_text)
                 except json.JSONDecodeError as exc:
