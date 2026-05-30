@@ -30,7 +30,12 @@ class CosmosShiftStore:
 
     def _create_client(self):
         try:
-            return CosmosClient(self.endpoint, credential=self.key, connection_verify=False)
+            return CosmosClient(
+                self.endpoint,
+                credential=self.key,
+                connection_verify=False,
+                enable_endpoint_discovery=False,
+            )
         except (AttributeError, Exception) as e:
             raise ServiceRequestError(f'Failed to create Cosmos client: {e}') from e
 
